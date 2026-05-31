@@ -1,0 +1,20 @@
+
+> crowdfaq@0.1.0 dev:all
+> concurrently --kill-others --names api,web --prefix-colors cyan,magenta "npm:dev:server" "npm:dev"
+
+[web] 
+[web] > crowdfaq@0.1.0 dev
+[web] > vite --host 127.0.0.1 --port 5174 --strictPort
+[web] 
+[api] 
+[api] > crowdfaq@0.1.0 dev:server
+[api] > node --watch backend/server.js
+[api] 
+[web] 
+[web]   [32m[1mVITE[22m v6.4.2[39m  [2mready in [0m[1m373[22m[2m[0m ms[22m
+[web] 
+[web]   [32m➜[39m  [1mLocal[22m:   [36mhttp://127.0.0.1:[1m5174[22m/[39m
+[api] CrowdFAQ API listening at http://localhost:3000
+[web] [33mThe file does not exist at "C:/Users/hp/OneDrive/Desktop/faq/node_modules/.vite/deps/react_jsx-dev-runtime.js" which is in the optimize deps directory. The dependency might be incompatible with the dep optimizer. Try adding it to `optimizeDeps.exclude`.[39m
+[web] [2m10:25:01 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/main.jsx[22m
+[web] [2m10:25:01 pm[22m [36m[1m[vite][22m[39m [90m[2m(client)[22m[39m [32mpage reload [39m[2msrc/App.jsx[22m
