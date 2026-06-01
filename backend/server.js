@@ -5,6 +5,7 @@ import dns from "node:dns";
 import express from "express";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
+import nodemailer from "nodemailer";
 
 const app = express();
 const port = Number(process.env.API_PORT ?? process.env.PORT ?? 3000);
@@ -75,6 +76,7 @@ const faqSchema = new mongoose.Schema(
     isAnonymous: { type: Boolean, default: false },
     upvotes: { type: Number, default: 0 },
     upvotedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    followers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     answerCount: { type: Number, default: 0 },
     viewCount: { type: Number, default: 0 },
     status: { type: String, enum: ["open", "answered", "closed"], default: "open" },
@@ -126,10 +128,25 @@ const reportSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+const notificationSchema = new mongoose.Schema(
+  {
+    recipient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    actor: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    type: { type: String, enum: ["answer", "accepted", "mention", "followed-answer"], required: true },
+    message: { type: String, required: true, trim: true },
+    faq: { type: mongoose.Schema.Types.ObjectId, ref: "Faq" },
+    answer: { type: mongoose.Schema.Types.ObjectId, ref: "Answer" },
+    read: { type: Boolean, default: false },
+  },
+  { timestamps: true },
+);
+notificationSchema.index({ recipient: 1, read: 1, createdAt: -1 });
+
 const User = mongoose.model("User", userSchema);
 const Faq = mongoose.model("Faq", faqSchema);
 const Answer = mongoose.model("Answer", answerSchema);
 const Report = mongoose.model("Report", reportSchema);
+const Notification = mongoose.model("Notification", notificationSchema);
 const userFields = "name email role branch semester rollNumber bio profilePicture reputation questionsAsked answersGiven acceptedAnswers savedFaqs isBanned createdAt";
 const authorFields = "name profilePicture reputation";
 
@@ -153,7 +170,7 @@ function publicFaqQuery(query) {
   return query.populate("author", authorFields);
 }
 function publicAnswerQuery(query) {
-  return query.populate("author", authorFields);
+  return query.populate("author", authorFields).populate("comments.author", authorFields);
 }
 function objectId(value) {
   return mongoose.isValidObjectId(value);
@@ -163,6 +180,49 @@ function validationErrors(error) {
 }
 function updateTrending(faq) {
   faq.isTrending = faq.upvotes > 5 || faq.answerCount > 3;
+}
+const smtpTransport = process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS
+  ? nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number(process.env.SMTP_PORT ?? 587),
+      secure: process.env.SMTP_SECURE === "true",
+      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+    })
+  : null;
+async function sendEmail(userId, subject, text) {
+  if (!smtpTransport || !userId) return;
+  const user = await User.findById(userId).select("email").lean();
+  if (!user?.email) return;
+  try {
+    await smtpTransport.sendMail({
+      from: process.env.SMTP_FROM ?? process.env.SMTP_USER,
+      to: user.email,
+      subject,
+      text,
+    });
+  } catch (error) {
+    console.error(`Email notification failed: ${error.message}`);
+  }
+}
+async function notify({ recipient, actor, type, message, faq, answer }) {
+  if (!recipient || String(recipient) === String(actor)) return;
+  await Notification.create({ recipient, actor, type, message, faq, answer });
+}
+async function notifyMentions(body, { actor, faq, answer }) {
+  const names = [...new Set([...String(body).matchAll(/@([a-zA-Z][a-zA-Z0-9_.-]{1,39})/g)].map((match) => match[1].replaceAll("_", " ")))];
+  if (!names.length) return;
+  const actorUser = await User.findById(actor).select("name").lean();
+  const users = await User.find({
+    $or: names.map((name) => ({ name: new RegExp(`^${escapeRegex(name)}(?:\\s|$)`, "i") })),
+  }).select("_id name").lean();
+  await Promise.all(users.map((user) => notify({
+    recipient: user._id,
+    actor,
+    type: "mention",
+    message: `You were mentioned by ${actorUser?.name ?? "another CrowdFAQ student"}`,
+    faq,
+    answer,
+  })));
 }
 async function generateAiText(prompt, instructions) {
   const explicitModel = process.env.AI_MODEL;
@@ -379,6 +439,25 @@ app.post("/api/auth/admin/login", async (request, response, next) => {
 app.get("/api/auth/me", authenticate, async (request, response) => {
   ok(response, { user: await User.findById(request.user.id).select(userFields) });
 });
+app.get("/api/notifications", authenticate, async (request, response, next) => {
+  try {
+    const [notifications, unreadCount] = await Promise.all([
+      Notification.find({ recipient: request.user.id }).populate("actor", "name").sort({ createdAt: -1 }).limit(30).lean(),
+      Notification.countDocuments({ recipient: request.user.id, read: false }),
+    ]);
+    return ok(response, { notifications, unreadCount });
+  } catch (error) {
+    next(error);
+  }
+});
+app.patch("/api/notifications/read-all", authenticate, async (request, response, next) => {
+  try {
+    await Notification.updateMany({ recipient: request.user.id, read: false }, { read: true });
+    return ok(response, { unreadCount: 0 });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/faqs/similar", async (request, response, next) => {
   try {
@@ -439,9 +518,10 @@ app.get("/api/faqs/:id", optionalAuth, async (request, response, next) => {
     if (!objectId(request.params.id)) return fail(response, 404, "FAQ not found");
     const faq = await publicFaqQuery(Faq.findById(request.params.id)).lean();
     if (!faq) return fail(response, 404, "FAQ not found");
-    const saved = request.user ? request.user.savedFaqs.some((id) => id.equals(faq._id)) : false;
-    const upvoted = request.user ? faq.upvotedBy.some((id) => id.equals(request.user.id)) : false;
-    return ok(response, { faq, saved, upvoted });
+    const saved = request.user ? (request.user.savedFaqs ?? []).some((id) => id.equals(faq._id)) : false;
+    const upvoted = request.user ? (faq.upvotedBy ?? []).some((id) => id.equals(request.user.id)) : false;
+    const followed = request.user ? (faq.followers ?? []).some((id) => id.equals(request.user.id)) : false;
+    return ok(response, { faq, saved, upvoted, followed });
   } catch (error) {
     next(error);
   }
@@ -458,6 +538,7 @@ app.post("/api/faqs/:id/upvote", authenticate, async (request, response, next) =
   try {
     const faq = await Faq.findById(request.params.id);
     if (!faq) return fail(response, 404, "FAQ not found");
+    faq.upvotedBy ??= [];
     const index = faq.upvotedBy.findIndex((id) => id.equals(request.user.id));
     if (index >= 0) faq.upvotedBy.splice(index, 1);
     else faq.upvotedBy.push(request.user.id);
@@ -473,9 +554,23 @@ app.post("/api/faqs/:id/save", authenticate, async (request, response, next) => 
   try {
     const faq = await Faq.exists({ _id: request.params.id });
     if (!faq) return fail(response, 404, "FAQ not found");
-    const saved = request.user.savedFaqs.some((id) => id.equals(request.params.id));
+    const saved = (request.user.savedFaqs ?? []).some((id) => id.equals(request.params.id));
     await User.findByIdAndUpdate(request.user.id, saved ? { $pull: { savedFaqs: request.params.id } } : { $addToSet: { savedFaqs: request.params.id } });
     return ok(response, { saved: !saved });
+  } catch (error) {
+    next(error);
+  }
+});
+app.post("/api/faqs/:id/follow", authenticate, async (request, response, next) => {
+  try {
+    const faq = await Faq.findById(request.params.id);
+    if (!faq) return fail(response, 404, "FAQ not found");
+    faq.followers ??= [];
+    const followed = faq.followers.some((id) => id.equals(request.user.id));
+    if (followed) faq.followers.pull(request.user.id);
+    else faq.followers.addToSet(request.user.id);
+    await faq.save();
+    return ok(response, { followed: !followed });
   } catch (error) {
     next(error);
   }
@@ -532,6 +627,26 @@ app.post("/api/faqs/:faqId/answers", authenticate, async (request, response, nex
     updateTrending(faq);
     await faq.save();
     await User.findByIdAndUpdate(request.user.id, { $inc: { answersGiven: 1, reputation: 10 } });
+    await Promise.all([
+      notify({
+        recipient: faq.author,
+        actor: request.user.id,
+        type: "answer",
+        message: `${request.user.name} answered your FAQ`,
+        faq: faq.id,
+        answer: answer.id,
+      }),
+      sendEmail(faq.author, "Your CrowdFAQ question received an answer", `${request.user.name} answered: ${faq.title}`),
+      ...(faq.followers ?? []).map((follower) => notify({
+        recipient: follower,
+        actor: request.user.id,
+        type: "followed-answer",
+        message: `${request.user.name} answered a FAQ you follow`,
+        faq: faq.id,
+        answer: answer.id,
+      })),
+      notifyMentions(answer.body, { actor: request.user.id, faq: faq.id, answer: answer.id }),
+    ]);
     return ok(response, { answer: await publicAnswerQuery(Answer.findById(answer.id)).lean(), answerCount: faq.answerCount }, 201);
   } catch (error) {
     next(error);
@@ -541,6 +656,8 @@ app.post("/api/answers/:id/upvote", authenticate, async (request, response, next
   try {
     const answer = await Answer.findById(request.params.id);
     if (!answer) return fail(response, 404, "Answer not found");
+    answer.upvotedBy ??= [];
+    answer.downvotedBy ??= [];
     const upIndex = answer.upvotedBy.findIndex((id) => id.equals(request.user.id));
     const downIndex = answer.downvotedBy.findIndex((id) => id.equals(request.user.id));
     let reputationChange = 0;
@@ -568,6 +685,8 @@ app.post("/api/answers/:id/downvote", authenticate, async (request, response, ne
   try {
     const answer = await Answer.findById(request.params.id);
     if (!answer) return fail(response, 404, "Answer not found");
+    answer.upvotedBy ??= [];
+    answer.downvotedBy ??= [];
     const downIndex = answer.downvotedBy.findIndex((id) => id.equals(request.user.id));
     const upIndex = answer.upvotedBy.findIndex((id) => id.equals(request.user.id));
     let reputationChange = 0;
@@ -591,6 +710,20 @@ app.post("/api/answers/:id/downvote", authenticate, async (request, response, ne
     next(error);
   }
 });
+app.post("/api/answers/:id/comments", authenticate, async (request, response, next) => {
+  try {
+    const body = String(request.body.body ?? "").trim();
+    if (body.length < 2 || body.length > 500) return fail(response, 400, "Comment must be between 2 and 500 characters");
+    const answer = await Answer.findById(request.params.id);
+    if (!answer) return fail(response, 404, "Answer not found");
+    answer.comments.push({ author: request.user.id, body });
+    await answer.save();
+    await notifyMentions(body, { actor: request.user.id, faq: answer.faq, answer: answer.id });
+    return ok(response, { answer: await publicAnswerQuery(Answer.findById(answer.id)).lean() }, 201);
+  } catch (error) {
+    next(error);
+  }
+});
 app.patch("/api/answers/:id/accept", authenticate, async (request, response, next) => {
   try {
     const answer = await Answer.findById(request.params.id);
@@ -604,13 +737,26 @@ app.patch("/api/answers/:id/accept", authenticate, async (request, response, nex
       await previous.save();
       await User.findByIdAndUpdate(previous.author, { $inc: { reputation: -25, acceptedAnswers: -1 } });
     }
+    let newlyAccepted = false;
     if (!answer.isAccepted) {
       answer.isAccepted = true;
       await answer.save();
       await User.findByIdAndUpdate(answer.author, { $inc: { reputation: 25, acceptedAnswers: 1 } });
+      newlyAccepted = true;
     }
     faq.status = "answered";
     await faq.save();
+    if (newlyAccepted) await Promise.all([
+      notify({
+        recipient: answer.author,
+        actor: request.user.id,
+        type: "accepted",
+        message: `${request.user.name} accepted your answer as Best Answer`,
+        faq: faq.id,
+        answer: answer.id,
+      }),
+      sendEmail(answer.author, "Your CrowdFAQ answer was accepted", `Your answer to "${faq.title}" was marked as Best Answer.`),
+    ]);
     return ok(response, { answer });
   } catch (error) {
     next(error);
@@ -733,6 +879,7 @@ app.delete("/api/admin/faqs/:id", authenticate, adminOnly, async (request, respo
     await Promise.all([
       Answer.deleteMany({ faq: request.params.id }),
       Report.deleteMany({ $or: [{ contentType: "faq", content: request.params.id }, { contentType: "answer", content: { $in: answers.map((answer) => answer._id) } }] }),
+      Notification.deleteMany({ faq: request.params.id }),
       User.updateMany({}, { $pull: { savedFaqs: request.params.id } }),
     ]);
     return ok(response, { deleted: true });
@@ -745,6 +892,7 @@ app.delete("/api/answers/:id", authenticate, adminOnly, async (request, response
     const answer = await Answer.findByIdAndDelete(request.params.id);
     if (!answer) return fail(response, 404, "Answer not found");
     await Report.deleteMany({ contentType: "answer", content: answer.id });
+    await Notification.deleteMany({ answer: answer.id });
     const faq = await Faq.findById(answer.faq);
     if (faq) {
       faq.answerCount = Math.max(0, faq.answerCount - 1);
@@ -809,6 +957,14 @@ async function migrateLegacyFaqs() {
       },
     );
   }
+  await Promise.all([
+    collection.updateMany({ followers: { $exists: false } }, { $set: { followers: [] } }),
+    collection.updateMany({ upvotedBy: { $exists: false } }, { $set: { upvotedBy: [] } }),
+    mongoose.connection.collection("answers").updateMany({ upvotedBy: { $exists: false } }, { $set: { upvotedBy: [] } }),
+    mongoose.connection.collection("answers").updateMany({ downvotedBy: { $exists: false } }, { $set: { downvotedBy: [] } }),
+    mongoose.connection.collection("answers").updateMany({ comments: { $exists: false } }, { $set: { comments: [] } }),
+    mongoose.connection.collection("users").updateMany({ savedFaqs: { $exists: false } }, { $set: { savedFaqs: [] } }),
+  ]);
   if (legacyFaqs.length) console.log(`Migrated ${legacyFaqs.length} legacy FAQ record(s)`);
 }
 async function start() {

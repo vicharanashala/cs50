@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowDown, ArrowRight, ArrowUp, Bookmark, Bot, Building2, Check, CheckCircle2,
+  ArrowDown, ArrowRight, ArrowUp, Bell, Bookmark, Bot, Building2, Check, CheckCircle2,
   ChevronDown, CircleAlert, Eye, FileText, Filter, GraduationCap, House, Link2,
-  LogIn, LogOut, Menu, MessageCircle, Pencil, Plus, Search, Send, Shield, Sparkles,
-  Tag, Trash2, TrendingUp, Trophy, User, Users, X,
+  LogIn, LogOut, Menu, MessageCircle, Moon, Pencil, Plus, Search, Send, Shield, Sparkles,
+  Sun, Tag, Trash2, TrendingUp, Trophy, User, UserCheck, UserPlus, Users, X,
 } from "lucide-react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "./AuthContext";
@@ -74,6 +74,44 @@ function PageLoader() {
   return <div className="page-loader"><span className="spinner" />Loading CrowdFAQ...</div>;
 }
 
+function FaqSkeletons() {
+  return <div className="skeleton-list">{[1, 2, 3].map((item) => <div className="skeleton-card" key={item}><span className="skeleton-line short" /><span className="skeleton-line title" /><span className="skeleton-line" /><span className="skeleton-line medium" /><span className="skeleton-line footer" /></div>)}</div>;
+}
+
+function ThemeToggle() {
+  const [dark, setDark] = useState(() => localStorage.getItem("crowdfaq_theme") === "dark");
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    localStorage.setItem("crowdfaq_theme", dark ? "dark" : "light");
+  }, [dark]);
+  return <button className="icon-btn" title={dark ? "Use light mode" : "Use dark mode"} onClick={() => setDark(!dark)}>{dark ? <Sun size={18} /> : <Moon size={18} />}</button>;
+}
+
+function NotificationBell() {
+  const auth = useAuth();
+  const [open, setOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [unread, setUnread] = useState(0);
+  async function load() {
+    if (!auth.user) return;
+    const data = await api("/notifications");
+    setNotifications(data.notifications);
+    setUnread(data.unreadCount);
+  }
+  useEffect(() => {
+    load().catch(() => {});
+    if (!auth.user) return undefined;
+    const interval = window.setInterval(() => load().catch(() => {}), 30000);
+    return () => window.clearInterval(interval);
+  }, [auth.user?._id]);
+  async function markAllRead() {
+    await patch("/notifications/read-all");
+    setUnread(0);
+    setNotifications((current) => current.map((notification) => ({ ...notification, read: true })));
+  }
+  return <div className="notification-wrap"><button className="icon-btn" title="Notifications" onClick={() => { setOpen(!open); load().catch(() => {}); }}><Bell size={18} />{unread > 0 && <span className="notification-count">{unread > 9 ? "9+" : unread}</span>}</button>{open && <div className="notification-panel"><div className="notification-heading"><b>Notifications</b>{unread > 0 && <button onClick={markAllRead}>Mark all read</button>}</div><div className="notification-list">{notifications.map((notification) => <Link className={notification.read ? "" : "unread"} key={notification._id} to={notification.faq ? `/faqs/${notification.faq}` : "/faqs"} onClick={() => setOpen(false)}><span>{notification.message}</span><small>{relativeTime(notification.createdAt)}</small></Link>)}{!notifications.length && <p>No notifications yet.</p>}</div></div>}</div>;
+}
+
 function Navbar() {
   const auth = useAuth();
   const navigate = useNavigate();
@@ -93,9 +131,11 @@ function Navbar() {
           {auth.isAdmin && <Link to="/admin"><Shield size={17} /> Admin</Link>}
         </nav>
         <div className="nav-actions">
+          <ThemeToggle />
           <Link className="ask-button" to="/faqs/ask"><Plus size={17} /> Ask a Question</Link>
           {auth.user ? (
             <>
+              <NotificationBell />
               <Link className="profile-btn" to="/profile">
                 <span className="avatar avatar-blue">{initials(auth.user.name)}</span>
                 <span className="profile-copy"><b>{auth.user.name}</b><small>{auth.user.reputation} rep</small></span>
@@ -324,7 +364,7 @@ function FeedPage() {
             <div className="feed-toolbar"><div className="sort-tabs">{[["latest", "Latest"], ["answered", "Most Answered"], ["upvoted", "Most Upvoted"], ["unanswered", "Unanswered"]].map(([value, label]) => <button key={value} className={filters.sort === value ? "active" : ""} onClick={() => setFilters({ ...filters, sort: value })}>{label}</button>)}</div><span>Showing {faqs.length} of {total} results</span></div>
             <div className="feed-list">{faqs.map((faq) => <FaqCard key={faq._id} faq={faq} onChange={(changed) => setFaqs((items) => items.map((item) => item._id === changed._id ? changed : item))} />)}
               {!loading && !faqs.length && <EmptyState />}
-              {loading && !faqs.length && <PageLoader />}
+              {loading && !faqs.length && <FaqSkeletons />}
             </div>
             {hasMore && <button className="load-more" disabled={loading} onClick={() => fetchFaqs(page + 1, true)}>{loading ? "Loading..." : "Load more questions"} <ChevronDown size={16} /></button>}
           </section>
@@ -438,10 +478,11 @@ function FaqDetailPage() {
   const [busy, setBusy] = useState(false);
   const [summaryBusy, setSummaryBusy] = useState(false);
   const [report, setReport] = useState(null);
+  const [progress, setProgress] = useState(0);
   const viewed = useRef(false);
   async function loadFaq() {
     const data = await api(`/faqs/${id}`);
-    setFaq({ ...data.faq, saved: data.saved, upvoted: data.upvoted });
+    setFaq({ ...data.faq, saved: data.saved, upvoted: data.upvoted, followed: data.followed });
   }
   async function loadAnswers() {
     setAnswers((await api(`/faqs/${id}/answers?sort=${sort}`)).answers);
@@ -452,6 +493,19 @@ function FaqDetailPage() {
     if (viewed.current) return;
     viewed.current = true;
     patch(`/faqs/${id}/view`).then(({ viewCount }) => setFaq((current) => current ? { ...current, viewCount } : current)).catch(() => {});
+  }, [id]);
+  useEffect(() => {
+    function updateProgress() {
+      const available = document.documentElement.scrollHeight - window.innerHeight;
+      setProgress(available > 0 ? Math.min(100, Math.max(0, (window.scrollY / available) * 100)) : 0);
+    }
+    updateProgress();
+    window.addEventListener("scroll", updateProgress, { passive: true });
+    window.addEventListener("resize", updateProgress);
+    return () => {
+      window.removeEventListener("scroll", updateProgress);
+      window.removeEventListener("resize", updateProgress);
+    };
   }, [id]);
   function requireLogin() {
     if (!auth.user) {
@@ -466,6 +520,14 @@ function FaqDetailPage() {
       const data = await post(`/faqs/${id}/${action}`, {});
       setFaq((current) => ({ ...current, ...data }));
       toast(action === "save" ? data.saved ? "Saved to your bookmarks" : "Removed from bookmarks" : data.upvoted ? "Upvoted!" : "Upvote removed");
+    } catch (error) { toast(error.message); }
+  }
+  async function toggleFollow() {
+    if (!requireLogin()) return;
+    try {
+      const data = await post(`/faqs/${id}/follow`, {});
+      setFaq((current) => ({ ...current, followed: data.followed }));
+      toast(data.followed ? "Following this FAQ" : "FAQ follow removed");
     } catch (error) { toast(error.message); }
   }
   async function submitAnswer(event) {
@@ -494,12 +556,12 @@ function FaqDetailPage() {
   if (!faq) return <Shell><PageLoader /></Shell>;
   const name = authorName(faq);
   const ownsFaq = auth.user?._id === faq.author?._id;
-  return <Shell><main className="detail-page">
+  return <Shell><div className="reading-progress"><i style={{ width: `${progress}%` }} /></div><main className="detail-page">
     <section className="surface detail-header">
       <div className="faq-topline"><span className="topic-badge violet">{faq.category}</span>{faq.company && <span className="mini-chip">{faq.company}</span>}{faq.role && <span className="mini-chip">{faq.role}</span>}<span className={`status ${faq.status}`}><i />{faq.status}</span></div>
       <h1>{faq.title}</h1><p className="detail-copy">{faq.description}</p><div className="tag-row">{faq.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
       <div className="detail-meta"><div className="author"><span className="avatar avatar-blue">{initials(name)}</span><span><b>{name}</b><small>{faq.author?.reputation ?? 0} reputation - asked {relativeTime(faq.createdAt)}</small></span></div><span><Eye size={15} /> {faq.viewCount} views</span></div>
-      <div className="detail-actions"><button className={faq.upvoted ? "active" : ""} onClick={() => toggleFaqAction("upvote")}><ArrowUp size={16} /> {faq.upvotes} Upvote</button><button className={faq.saved ? "active" : ""} onClick={() => toggleFaqAction("save")}><Bookmark size={16} /> {faq.saved ? "Saved" : "Save"}</button><button onClick={share}><Link2 size={16} /> Share</button><button onClick={() => requireLogin() && setReport({ type: "faq", id })}><CircleAlert size={16} /> Report</button></div>
+      <div className="detail-actions"><button className={faq.upvoted ? "active" : ""} onClick={() => toggleFaqAction("upvote")}><ArrowUp size={16} /> {faq.upvotes} Upvote</button><button className={faq.saved ? "active" : ""} onClick={() => toggleFaqAction("save")}><Bookmark size={16} /> {faq.saved ? "Saved" : "Save"}</button><button className={faq.followed ? "active" : ""} onClick={toggleFollow}>{faq.followed ? <UserCheck size={16} /> : <UserPlus size={16} />} {faq.followed ? "Following" : "Follow"}</button><button onClick={share}><Link2 size={16} /> Share</button><button onClick={() => requireLogin() && setReport({ type: "faq", id })}><CircleAlert size={16} /> Report</button></div>
     </section>
     <section className="surface summary-box"><span className="section-label"><Bot size={15} /> AI summary</span>{faq.aiSummary ? <><p>{faq.aiSummary}</p><small>Generated from community answers - updated {relativeTime(faq.aiSummaryUpdatedAt)}</small></> : <p>{faq.answerCount >= 3 ? "Turn the discussion into a quick practical summary." : "A summary can be generated once this question has at least 3 answers."}</p>}{faq.answerCount >= 3 && <button className="outline-button" disabled={summaryBusy} onClick={generateSummary}>{summaryBusy ? "Generating..." : faq.aiSummary ? "Regenerate" : "Generate AI summary"}</button>}</section>
     <section className="answers-section"><div className="answers-heading"><h2>{faq.answerCount} Answers</h2><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="upvoted">Most upvoted</option><option value="newest">Newest</option><option value="oldest">Oldest</option></select></div>
@@ -515,6 +577,8 @@ function AnswerCard({ answer, ownsFaq, onReload, onReport }) {
   const auth = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
+  const [comment, setComment] = useState("");
+  const [commentBusy, setCommentBusy] = useState(false);
   const name = authorName(answer);
   const upvoted = answer.upvotedBy.includes(auth.user?._id);
   const downvoted = answer.downvotedBy.includes(auth.user?._id);
@@ -525,7 +589,18 @@ function AnswerCard({ answer, ownsFaq, onReload, onReport }) {
   async function accept() {
     try { await patch(`/answers/${answer._id}/accept`); toast("Best Answer marked!"); onReload(); } catch (error) { toast(error.message); }
   }
-  return <article className={`surface answer-card ${answer.isAccepted ? "accepted" : ""}`}>{answer.isAccepted && <div className="best-answer"><CheckCircle2 size={15} /> Best Answer</div>}<div className="answer-card-header"><div className="author"><span className="avatar avatar-green">{initials(name)}</span><span><b>{name}</b><small>{answer.author?.reputation ?? 0} reputation - answered {relativeTime(answer.createdAt)}</small></span></div><span className={`verification-badge ${answer.isVerified ? "verified" : "unverified"}`}>{answer.isVerified ? <CheckCircle2 size={13} /> : <CircleAlert size={13} />}{answer.isVerified ? "Verified" : "Unverified"}</span></div><p>{answer.body}</p><div className="answer-actions"><button className={upvoted ? "active" : ""} onClick={() => vote("upvote")}><ArrowUp size={15} /> {answer.upvotes}</button><button className={downvoted ? "active" : ""} onClick={() => vote("downvote")}><ArrowDown size={15} /> {answer.downvotes}</button>{ownsFaq && <button disabled={!answer.isVerified} title={answer.isVerified ? "Mark as Best Answer" : "Admin verification required"} onClick={accept}><Check size={15} /> Accept</button>}<button onClick={onReport}><CircleAlert size={15} /> Report</button></div></article>;
+  async function postComment(event) {
+    event.preventDefault();
+    if (!auth.user) return navigate("/login", { state: { message: "Please login to continue" } });
+    setCommentBusy(true);
+    try {
+      await post(`/answers/${answer._id}/comments`, { body: comment });
+      setComment("");
+      toast("Comment posted");
+      onReload();
+    } catch (error) { toast(error.message); } finally { setCommentBusy(false); }
+  }
+  return <article className={`surface answer-card ${answer.isAccepted ? "accepted" : ""}`}>{answer.isAccepted && <div className="best-answer"><CheckCircle2 size={15} /> Best Answer</div>}<div className="answer-card-header"><div className="author"><span className="avatar avatar-green">{initials(name)}</span><span><b>{name}</b><small>{answer.author?.reputation ?? 0} reputation - answered {relativeTime(answer.createdAt)}</small></span></div><span className={`verification-badge ${answer.isVerified ? "verified" : "unverified"}`}>{answer.isVerified ? <CheckCircle2 size={13} /> : <CircleAlert size={13} />}{answer.isVerified ? "Verified" : "Unverified"}</span></div><p>{answer.body}</p><div className="answer-actions"><button className={upvoted ? "active" : ""} onClick={() => vote("upvote")}><ArrowUp size={15} /> {answer.upvotes}</button><button className={downvoted ? "active" : ""} onClick={() => vote("downvote")}><ArrowDown size={15} /> {answer.downvotes}</button>{ownsFaq && <button disabled={!answer.isVerified} title={answer.isVerified ? "Mark as Best Answer" : "Admin verification required"} onClick={accept}><Check size={15} /> Accept</button>}<button onClick={onReport}><CircleAlert size={15} /> Report</button></div><div className="comment-thread">{answer.comments?.map((item) => <div className="comment" key={item._id}><b>{item.author?.name ?? "Student"}</b><span>{item.body}</span><small>{relativeTime(item.createdAt)}</small></div>)}<form className="comment-form" onSubmit={postComment}><input required minLength="2" maxLength="500" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a comment or mention @FirstName..." /><button disabled={commentBusy || !comment.trim()}><Send size={14} /></button></form></div></article>;
 }
 
 function ReportModal({ report, onClose }) {
