@@ -164,7 +164,7 @@ function validationErrors(error) {
 function updateTrending(faq) {
   faq.isTrending = faq.upvotes > 5 || faq.answerCount > 3;
 }
-async function generateAiSummary(prompt) {
+async function generateAiText(prompt, instructions) {
   const explicitModel = process.env.AI_MODEL;
   const legacyGeminiModel = process.env.OPENAI_MODEL?.startsWith("gemini-") ? process.env.OPENAI_MODEL : null;
   const useGemini = explicitModel ? explicitModel.startsWith("gemini-") : Boolean(process.env.GEMINI_API_KEY || legacyGeminiModel);
@@ -175,7 +175,7 @@ async function generateAiSummary(prompt) {
     const aiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: "POST",
       headers: { "x-goog-api-key": apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      body: JSON.stringify({ contents: [{ parts: [{ text: `${instructions}\n\n${prompt}` }] }] }),
     });
     const result = await aiResponse.json();
     if (!aiResponse.ok) throw new Error("AI_REQUEST_FAILED");
@@ -187,13 +187,42 @@ async function generateAiSummary(prompt) {
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
-      instructions: "Summarize the student community answers into a concise, practical response. Do not invent facts. Use plain text and at most 180 words.",
+      instructions,
       input: prompt,
     }),
   });
   const result = await aiResponse.json();
   if (!aiResponse.ok) throw new Error("AI_REQUEST_FAILED");
   return result.output_text ?? result.output?.flatMap((item) => item.content ?? []).find((item) => item.type === "output_text")?.text;
+}
+const chatStopWords = new Set([
+  "about", "after", "also", "and", "are", "can", "could", "does", "for", "from", "have",
+  "how", "internship", "into", "more", "need", "please", "should", "that", "the", "their",
+  "then", "there", "this", "want", "what", "when", "where", "which", "with", "would", "your",
+]);
+function getChatTerms(message) {
+  return [...new Set(String(message).toLowerCase().match(/[a-z0-9]+/g) ?? [])]
+    .filter((term) => term.length >= 3 && !chatStopWords.has(term))
+    .slice(0, 10);
+}
+function faqRelevance(faq, terms) {
+  const title = faq.title.toLowerCase();
+  const description = faq.description.toLowerCase();
+  const tags = faq.tags.join(" ").toLowerCase();
+  const details = `${faq.company ?? ""} ${faq.role ?? ""}`.toLowerCase();
+  return terms.reduce((score, term) => score
+    + (title.includes(term) ? 6 : 0)
+    + (tags.includes(term) ? 4 : 0)
+    + (details.includes(term) ? 3 : 0)
+    + (description.includes(term) ? 1 : 0), 0);
+}
+function noChatContext(response) {
+  return ok(response, {
+    answer: "I could not find a matching answered FAQ yet. Please post a new FAQ so the community can help.",
+    sources: [],
+    hasContext: false,
+    suggestFaq: true,
+  });
 }
 
 async function authenticate(request, response, next) {
@@ -228,6 +257,59 @@ function adminOnly(request, response, next) {
 
 app.get("/api/health", (_request, response) => {
   ok(response, { status: "ok", database: mongoose.connection.readyState === 1 ? "connected" : "disconnected" });
+});
+app.post("/api/chatbot", async (request, response, next) => {
+  try {
+    const message = String(request.body.message ?? "").trim();
+    if (message.length < 3 || message.length > 500) {
+      return fail(response, 400, "Please enter a question between 3 and 500 characters");
+    }
+    const terms = getChatTerms(message);
+    if (!terms.length) return noChatContext(response);
+    const pattern = new RegExp(terms.map(escapeRegex).join("|"), "i");
+    const faqs = await Faq.find({
+      status: "answered",
+      answerCount: { $gt: 0 },
+      $or: [{ title: pattern }, { description: pattern }, { tags: pattern }, { company: pattern }, { role: pattern }],
+    }).select("title description category company role tags aiSummary").limit(12).lean();
+    if (!faqs.length) return noChatContext(response);
+    const rankedFaqs = faqs
+      .map((faq) => ({ ...faq, relevance: faqRelevance(faq, terms) }))
+      .filter((faq) => faq.relevance > 0)
+      .sort((left, right) => right.relevance - left.relevance)
+      .slice(0, 3);
+    const answers = await Answer.find({ faq: { $in: rankedFaqs.map((faq) => faq._id) }, isVerified: true })
+      .sort({ isAccepted: -1, upvotes: -1, createdAt: -1 })
+      .select("faq body isAccepted upvotes")
+      .lean();
+    const sources = rankedFaqs
+      .map((faq) => ({ ...faq, answers: answers.filter((answer) => answer.faq.equals(faq._id)).slice(0, 3) }))
+      .filter((faq) => faq.answers.length);
+    if (!sources.length) return noChatContext(response);
+    const context = sources.map((faq, faqIndex) => [
+      `FAQ ${faqIndex + 1}: ${faq.title}`,
+      `Description: ${faq.description}`,
+      ...faq.answers.map((answer, answerIndex) => `Verified answer ${answerIndex + 1}: ${answer.body}`),
+    ].join("\n")).join("\n\n");
+    let answer;
+    try {
+      answer = await generateAiText(
+        `Student question: ${message}\n\nCrowdFAQ context:\n${context}`,
+        "Answer the student's question using only the CrowdFAQ context. Keep the answer practical and concise. If the context is incomplete, say what is missing. Do not invent details or claim information outside the supplied FAQs.",
+      );
+    } catch (error) {
+      if (!["AI_NOT_CONFIGURED", "AI_REQUEST_FAILED"].includes(error.message)) throw error;
+      answer = `I found a relevant verified community answer: ${sources[0].answers[0].body}`;
+    }
+    return ok(response, {
+      answer,
+      hasContext: true,
+      suggestFaq: false,
+      sources: sources.map((faq) => ({ id: faq._id, title: faq.title, category: faq.category })),
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/api/auth/register", async (request, response, next) => {
@@ -317,7 +399,13 @@ app.get("/api/faqs", optionalAuth, async (request, response, next) => {
     const page = Math.max(1, Number(request.query.page) || 1);
     const limit = Math.min(50, Math.max(1, Number(request.query.limit) || 10));
     const filter = {};
-    if (search) filter.$text = { $search: String(search) };
+    if (search) {
+      const pattern = new RegExp(
+        String(search).trim().split(/\s+/).filter(Boolean).map(escapeRegex).join("|"),
+        "i",
+      );
+      filter.$or = [{ title: pattern }, { description: pattern }, { tags: pattern }];
+    }
     if (category) filter.category = { $in: String(category).split(",").filter(Boolean) };
     if (company) filter.company = new RegExp(escapeRegex(company), "i");
     if (role) filter.role = new RegExp(escapeRegex(role), "i");
@@ -408,7 +496,10 @@ app.post("/api/faqs/:id/generate-summary", authenticate, async (request, respons
     if (!faq) return fail(response, 404, "FAQ not found");
     const answers = await Answer.find({ faq: faq.id }).sort({ isAccepted: -1, upvotes: -1 }).select("body").lean();
     if (answers.length < 3) return fail(response, 400, "At least 3 answers are needed to generate a summary");
-    const summary = await generateAiSummary(`Summarize the student community answers into a concise, practical response. Do not invent facts. Use plain text and at most 180 words.\n\nQuestion: ${faq.title}\n\nAnswers:\n${answers.map((answer, index) => `${index + 1}. ${answer.body}`).join("\n")}`);
+    const summary = await generateAiText(
+      `Question: ${faq.title}\n\nAnswers:\n${answers.map((answer, index) => `${index + 1}. ${answer.body}`).join("\n")}`,
+      "Summarize the student community answers into a concise, practical response. Do not invent facts. Use plain text and at most 180 words.",
+    );
     if (!summary) return fail(response, 502, "The AI summary service returned an empty response");
     faq.aiSummary = summary;
     faq.aiSummaryUpdatedAt = new Date();

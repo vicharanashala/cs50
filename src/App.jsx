@@ -110,7 +110,54 @@ function Navbar() {
 }
 
 function Shell({ children }) {
-  return <div className="app-shell"><Navbar />{children}<footer><Link className="brand" to="/faqs"><span className="brand-mark"><MessageCircle size={17} /></span>Crowd<span>FAQ</span></Link><p>Built for ambitious interns, powered by shared experiences.</p><span>&copy; 2026 CrowdFAQ</span></footer></div>;
+  return <div className="app-shell"><Navbar />{children}<footer><Link className="brand" to="/faqs"><span className="brand-mark"><MessageCircle size={17} /></span>Crowd<span>FAQ</span></Link><p>Built for ambitious interns, powered by shared experiences.</p><span>&copy; 2026 CrowdFAQ</span></footer><Chatbot /></div>;
+}
+
+function Chatbot() {
+  const auth = useAuth();
+  const location = useLocation();
+  const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [messages, setMessages] = useState(() => [{
+    role: "bot",
+    text: "Hi! Ask me about internships. I answer using verified CrowdFAQ community answers.",
+  }]);
+  const messagesEnd = useRef();
+  useEffect(() => {
+    if (open) messagesEnd.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, open]);
+  async function submit(event) {
+    event.preventDefault();
+    const message = input.trim();
+    if (!message || busy) return;
+    setMessages((current) => [...current, { role: "user", text: message }]);
+    setInput("");
+    setBusy(true);
+    try {
+      const data = await post("/chatbot", { message });
+      setMessages((current) => [...current, { role: "bot", text: data.answer, sources: data.sources, suggestFaq: data.suggestFaq }]);
+    } catch (error) {
+      toast(error.message);
+      setMessages((current) => [...current, { role: "bot", text: "I could not answer that right now. Please try again shortly." }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return <>
+    {!open && location.pathname === "/faqs" && <button className="chat-greeting" onClick={() => setOpen(true)}>Hi{auth.user ? `, ${auth.user.name.split(" ")[0]}` : ""}! Need help finding an internship answer?</button>}
+    {open && <section className="chat-panel" aria-label="CrowdFAQ AI assistant">
+      <header className="chat-header"><span className="chat-bot-icon"><Bot size={18} /></span><span><b>CrowdFAQ Assistant</b><small>Grounded in verified answers</small></span><button aria-label="Close chat" onClick={() => setOpen(false)}><X size={17} /></button></header>
+      <div className="chat-messages">{messages.map((message, index) => <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
+        <p>{message.text}</p>
+        {!!message.sources?.length && <div className="chat-sources"><small>Community sources</small>{message.sources.map((source) => <Link key={source.id} to={`/faqs/${source.id}`} onClick={() => setOpen(false)}>{source.title}</Link>)}</div>}
+        {message.suggestFaq && <Link className="chat-ask-link" to="/faqs/ask" onClick={() => setOpen(false)}><Plus size={14} /> Ask a new FAQ</Link>}
+      </div>)}{busy && <div className="chat-message bot"><p>Checking verified community answers...</p></div>}<span ref={messagesEnd} /></div>
+      <form className="chat-form" onSubmit={submit}><input maxLength="500" value={input} onChange={(event) => setInput(event.target.value)} placeholder="Ask about internships..." /><button disabled={busy || !input.trim()} aria-label="Send question"><Send size={16} /></button></form>
+    </section>}
+    <button className="chat-toggle" aria-label={open ? "Close AI assistant" : "Open AI assistant"} onClick={() => setOpen(!open)}>{open ? <X size={22} /> : <Bot size={22} />}</button>
+  </>;
 }
 
 function AuthPage({ register = false }) {
@@ -222,24 +269,28 @@ function FeedPage() {
   const [search, setSearch] = useState("");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState({ categories: [], company: "", role: "", status: "all", sort: "latest" });
+  const latestRequest = useRef(0);
   const debouncedSearch = useDebounced(search, 400);
   const debouncedCompany = useDebounced(filters.company, 400);
   const debouncedRole = useDebounced(filters.role, 400);
   const toast = useToast();
   const filterKey = JSON.stringify({ search: debouncedSearch, company: debouncedCompany, role: debouncedRole, categories: filters.categories, status: filters.status, sort: filters.sort });
   async function fetchFaqs(nextPage = 1, append = false) {
+    const requestId = ++latestRequest.current;
     setLoading(true);
     try {
       const params = queryString({ search: debouncedSearch, company: debouncedCompany, role: debouncedRole, category: filters.categories.join(","), status: filters.status, sort: filters.sort, page: nextPage, limit: 10 });
       const data = await api(`/faqs?${params}`);
+      if (requestId !== latestRequest.current) return;
       setFaqs((current) => append ? [...current, ...data.faqs] : data.faqs);
       setTotal(data.total);
       setHasMore(data.hasMore);
       setPage(nextPage);
     } catch (error) {
+      if (requestId !== latestRequest.current) return;
       toast(error.message);
     } finally {
-      setLoading(false);
+      if (requestId === latestRequest.current) setLoading(false);
     }
   }
   useEffect(() => { fetchFaqs(); }, [filterKey]);
@@ -250,10 +301,14 @@ function FeedPage() {
     setSearch("");
     setFilters({ categories: [], company: "", role: "", status: "all", sort: "latest" });
   }
+  function updateSearch(event) {
+    setSearch(event.target.value);
+    setFilters((current) => ({ ...current, categories: [], company: "", role: "", status: "all" }));
+  }
   return (
     <Shell>
       <section className="feed-hero"><div><span className="section-label"><Sparkles size={14} /> Built by interns, for interns</span><h1>Find answers. <span>Share experience.</span></h1><p>Real internship questions and practical answers from students who have been there.</p></div>
-        <div className="hero-search"><Search size={20} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search FAQs..." /></div>
+        <div className="hero-search"><Search size={20} /><input value={search} onChange={updateSearch} placeholder="Search title, description, or tags..." /></div>
       </section>
       <main className="page-content">
         <div className="section-heading"><div><span className="section-label"><MessageCircle size={14} /> Community knowledge</span><h2>Internship FAQs</h2></div><button className="filter-mobile" onClick={() => setFiltersOpen(!filtersOpen)}><Filter size={16} /> Filters</button></div>
