@@ -166,14 +166,15 @@ footer .brand { font-size:17px; }
 footer .brand-mark { width:29px; height:29px; border-radius:9px; }
 
 .modal-backdrop { position:fixed; z-index:30; inset:0; display:grid; place-items:center; padding:20px; background:#1b29445c; backdrop-filter:blur(5px); }
-.composer { position:relative; width:min(100%,475px); padding:30px; border-radius:17px; background:#fff; box-shadow:0 20px 60px #293c6050; }
+.composer { position:relative; width:min(100%,475px); max-height:calc(100vh - 40px); overflow:auto; padding:30px; border-radius:17px; background:#fff; box-shadow:0 20px 60px #293c6050; }
 .close-button { position:absolute; top:15px; right:15px; padding:4px; color:#929daf; background:transparent; }
 .composer-icon { display:grid; width:45px; height:45px; place-items:center; border-radius:13px; color:#fff; background:linear-gradient(135deg,#6987f8,#735fe4); }
 .composer h2 { margin:15px 0 4px; font-size:27px; }
 .composer p { margin-bottom:19px; color:#8e99ab; font-size:12px; line-height:1.6; }
 .composer label { display:grid; gap:7px; margin-top:13px; color:#536078; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
-.composer input, .composer select { width:100%; padding:12px; border:1px solid #e0e6f1; border-radius:9px; outline:0; color:#536078; background:#fff; font-size:12px; text-transform:none; letter-spacing:0; }
-.composer input:focus, .composer select:focus { border-color:#8090ee; box-shadow:0 0 0 3px #6878ef1a; }
+.composer input, .composer select, .composer textarea { width:100%; padding:12px; border:1px solid #e0e6f1; border-radius:9px; outline:0; color:#536078; background:#fff; font:inherit; font-size:12px; text-transform:none; letter-spacing:0; }
+.composer textarea { min-height:88px; resize:vertical; }
+.composer input:focus, .composer select:focus, .composer textarea:focus { border-color:#8090ee; box-shadow:0 0 0 3px #6878ef1a; }
 .composer-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:23px; }
 .cancel { padding:10px 14px; color:#8994a5; background:transparent; font-size:12px; font-weight:700; }
 .toast { position:fixed; right:24px; bottom:24px; z-index:40; display:flex; align-items:center; gap:7px; padding:12px 16px; border-radius:9px; color:#fff; background:#344461; box-shadow:0 10px 30px #23334b3b; font-size:12px; font-weight:700; }

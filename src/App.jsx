@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   BarChart3,
@@ -44,7 +44,9 @@ const categories = [
   { name: "Work Culture", icon: Building2, count: "167", color: "purple" },
 ];
 
-const faqs = [
+const apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
+
+const demoFaqs = [
   {
     id: 1,
     title: "How should I prepare for Google's SDE internship coding rounds?",
@@ -134,14 +136,79 @@ const quickQuestions = [
 
 const chips = ["Google", "Remote", "SDE Intern", "Resume review", "PPO"];
 
+const emptyQuestion = {
+  title: "",
+  description: "",
+  category: "",
+  company: "",
+  tags: "",
+  author: "",
+};
+
+const categoryColors = {
+  "Interview Prep": "violet",
+  "Coding Rounds": "cyan",
+  "Resume & Portfolio": "orange",
+  "Application Process": "pink",
+  "Stipend & Pay": "green",
+  "Work Culture": "purple",
+};
+
+function getInitials(name) {
+  return name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase();
+}
+
+function formatFaq(faq) {
+  const author = faq.author || "Anonymous";
+
+  return {
+    id: faq._id,
+    title: faq.title,
+    excerpt: faq.description,
+    category: faq.category,
+    company: faq.company,
+    tags: faq.tags ?? [],
+    votes: faq.upvoteCount ?? 0,
+    answers: faq.answerCount ?? 0,
+    views: faq.views ?? 0,
+    author,
+    initials: getInitials(author),
+    time: new Date(faq.createdAt).toLocaleDateString(),
+    status: `${faq.status[0].toUpperCase()}${faq.status.slice(1)}`,
+    trending: false,
+    color: categoryColors[faq.category] ?? "blue",
+  };
+}
+
 function App() {
   const [activeCategory, setActiveCategory] = useState("All topics");
   const [activeSort, setActiveSort] = useState("Trending");
   const [search, setSearch] = useState("");
   const [saved, setSaved] = useState([2]);
+  const [savedFaqs, setSavedFaqs] = useState([]);
   const [showComposer, setShowComposer] = useState(false);
   const [toast, setToast] = useState("");
   const [mobileFilters, setMobileFilters] = useState(false);
+  const [question, setQuestion] = useState(emptyQuestion);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    fetch(`${apiUrl}/api/faqs`)
+      .then((response) => {
+        if (!response.ok) throw new Error("Could not load saved FAQs");
+        return response.json();
+      })
+      .then(({ faqs }) => setSavedFaqs(faqs.map(formatFaq)))
+      .catch(() => flash("Could not load saved FAQs. Is the API running?"));
+  }, []);
+
+  const faqs = useMemo(() => [...savedFaqs, ...demoFaqs], [savedFaqs]);
 
   const visibleFaqs = useMemo(() => {
     return faqs.filter((faq) => {
@@ -154,7 +221,7 @@ function App() {
         faq.tags.some((tag) => tag.toLowerCase().includes(value));
       return hasCategory && matchesSearch;
     });
-  }, [activeCategory, search]);
+  }, [activeCategory, faqs, search]);
 
   function flash(message) {
     setToast(message);
@@ -166,6 +233,40 @@ function App() {
       current.includes(id) ? current.filter((savedId) => savedId !== id) : [...current, id],
     );
     flash(saved.includes(id) ? "Removed from saved FAQs" : "Saved for later");
+  }
+
+  function updateQuestion(event) {
+    const { name, value } = event.target;
+    setQuestion((current) => ({ ...current, [name]: value }));
+  }
+
+  async function submitQuestion(event) {
+    event.preventDefault();
+    setIsSubmitting(true);
+
+    try {
+      const response = await fetch(`${apiUrl}/api/faqs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...question,
+          author: question.author || "Anonymous",
+          tags: question.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) throw new Error(result.message || "Could not save question");
+
+      setSavedFaqs((current) => [formatFaq(result.faq), ...current]);
+      setQuestion(emptyQuestion);
+      setShowComposer(false);
+      flash("Question saved to MongoDB");
+    } catch (error) {
+      flash(error.message);
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   return (
@@ -398,25 +499,29 @@ function App() {
 
       {showComposer && (
         <div className="modal-backdrop" onMouseDown={() => setShowComposer(false)}>
-          <div className="composer" onMouseDown={(event) => event.stopPropagation()}>
-            <button className="close-button" onClick={() => setShowComposer(false)}><X size={19} /></button>
+          <form className="composer" onSubmit={submitQuestion} onMouseDown={(event) => event.stopPropagation()}>
+            <button type="button" className="close-button" onClick={() => setShowComposer(false)}><X size={19} /></button>
             <span className="composer-icon"><MessageCircle size={22} /></span>
             <h2>Ask the community</h2>
             <p>Share enough context to help other interns give you a useful answer.</p>
-            <label>Question title<input placeholder="e.g. How should I prepare for an SDE interview?" /></label>
+            <label>Question title<input required minLength="10" name="title" value={question.title} onChange={updateQuestion} placeholder="e.g. How should I prepare for an SDE interview?" /></label>
+            <label>Details<textarea required minLength="20" name="description" value={question.description} onChange={updateQuestion} placeholder="Add context so the community can give you a useful answer." /></label>
             <label>Topic
-              <select defaultValue="">
+              <select required name="category" value={question.category} onChange={updateQuestion}>
                 <option value="" disabled>Select a category</option>
                 {categories.slice(1).map(({ name }) => <option key={name}>{name}</option>)}
               </select>
             </label>
+            <label>Company<input name="company" value={question.company} onChange={updateQuestion} placeholder="Optional" /></label>
+            <label>Tags<input name="tags" value={question.tags} onChange={updateQuestion} placeholder="e.g. DSA, Remote, Interview" /></label>
+            <label>Your name<input name="author" value={question.author} onChange={updateQuestion} placeholder="Anonymous" /></label>
             <div className="composer-actions">
-              <button className="cancel" onClick={() => setShowComposer(false)}>Cancel</button>
-              <button className="ask-button" onClick={() => { setShowComposer(false); flash("Question draft started"); }}>
-                Continue <ArrowRight size={16} />
+              <button type="button" className="cancel" onClick={() => setShowComposer(false)}>Cancel</button>
+              <button type="submit" className="ask-button" disabled={isSubmitting}>
+                {isSubmitting ? "Saving..." : "Post question"} <ArrowRight size={16} />
               </button>
             </div>
-          </div>
+          </form>
         </div>
       )}
 
