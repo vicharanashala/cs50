@@ -58,6 +58,9 @@ function queryString(values) {
   });
   return params.toString();
 }
+function categoriesFromParams(params) {
+  return String(params.get("category") ?? "").split(",").filter((category) => categories.includes(category));
+}
 
 function ToastProvider({ children }) {
   const [message, setMessage] = useState("");
@@ -97,7 +100,7 @@ function ThemeToggle() {
 }
 
 function Brand({ compact = false }) {
-  return <Link className={`brand ${compact ? "brand-compact" : ""}`} to="/faqs"><span className="brand-mark"><MessageCircle size={compact ? 17 : 19} /></span><span className="brand-name">Crowd<span>FAQ</span></span></Link>;
+  return <Link className={`brand ${compact ? "brand-compact" : ""}`} to="/"><span className="brand-mark"><MessageCircle size={compact ? 17 : 19} /></span><span className="brand-name">Crowd<span>FAQ</span></span></Link>;
 }
 
 function HeaderSearch() {
@@ -112,7 +115,11 @@ function HeaderSearch() {
     const value = search.trim();
     navigate(value ? `/faqs?${queryString({ search: value })}` : "/faqs");
   }
-  return <form className="nav-search" role="search" onSubmit={submit}><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search FAQs..." aria-label="Search FAQs" /><button aria-label="Search"><Search size={15} /></button></form>;
+  function clear() {
+    setSearch("");
+    if (location.pathname === "/faqs") navigate("/faqs");
+  }
+  return <form className="nav-search" role="search" onSubmit={submit}><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search title, description, or tags..." aria-label="Search FAQs" />{search && <button type="button" aria-label="Clear search" onClick={clear}><X size={14} /></button>}</form>;
 }
 
 function NotificationBell() {
@@ -166,17 +173,17 @@ function Navbar() {
         <HeaderSearch />
         <div className="nav-actions">
           <ThemeToggle />
-          <Link className="ask-button" to="/faqs/ask"><Plus size={17} /> Ask a Question</Link>
           {auth.user ? (
             <>
               <NotificationBell />
+              <Link className="ask-button" to="/faqs/ask"><Plus size={17} /> Ask a Question</Link>
               <Link className="profile-btn" to="/profile">
                 <span className="avatar avatar-blue">{initials(auth.user.name)}</span>
                 <span className="profile-copy"><b>{auth.user.name}</b><small>{auth.user.reputation} rep</small></span>
               </Link>
               <button className="icon-btn" title="Logout" onClick={logout}><LogOut size={18} /></button>
             </>
-          ) : <Link className="outline-button" to="/login"><LogIn size={16} /> Login</Link>}
+          ) : <><Link className="ask-button" to="/faqs/ask"><Plus size={17} /> Ask a Question</Link><Link className="outline-button" to="/login"><LogIn size={16} /> Login</Link></>}
         </div>
       </div>
     </header>
@@ -220,7 +227,7 @@ function Chatbot() {
     }
   }
   return <>
-    {!open && location.pathname === "/faqs" && <button className="chat-greeting" onClick={() => setOpen(true)}>Hi{auth.user ? `, ${auth.user.name.split(" ")[0]}` : ""}! Need help finding an internship answer?</button>}
+    {!open && location.pathname === "/faqs" && <button className="chat-greeting" onClick={() => setOpen(true)}>Hii{auth.user ? `, ${auth.user.name.split(" ")[0]}` : ""}! Need any help?</button>}
     {open && <section className="chat-panel" aria-label="CrowdFAQ AI assistant">
       <header className="chat-header"><span className="chat-bot-icon"><Bot size={18} /></span><span><b>CrowdFAQ Assistant</b><small>Grounded in verified answers</small></span><button aria-label="Close chat" onClick={() => setOpen(false)}><X size={17} /></button></header>
       <div className="chat-messages">{messages.map((message, index) => <div className={`chat-message ${message.role}`} key={`${message.role}-${index}`}>
@@ -334,6 +341,33 @@ function Field({ label, error, children }) {
   return <label className="field"><span>{label}</span>{children}{error && <small className="field-error">{error}</small>}</label>;
 }
 
+function LandingPage() {
+  const toast = useToast();
+  const [landingData, setLandingData] = useState(null);
+  useEffect(() => {
+    api("/landing-stats").then(setLandingData).catch((error) => toast(error.message));
+  }, []);
+  const stats = landingData ? [
+    [landingData.stats.questionsAsked.toLocaleString(), "Questions Asked"],
+    [landingData.stats.internsHelped.toLocaleString(), "Interns Helped"],
+    [landingData.stats.companiesCovered.toLocaleString(), "Companies Covered"],
+    [`${landingData.stats.answeredRate}%`, "Answered Rate"],
+  ] : [["--", "Questions Asked"], ["--", "Interns Helped"], ["--", "Companies Covered"], ["--", "Answered Rate"]];
+  return <Shell><main className="landing-page">
+    <section className="landing-hero">
+      <span className="landing-orb orb-indigo" />
+      <span className="landing-orb orb-violet" />
+      <span className="landing-orb orb-cyan" />
+      <div className="landing-copy"><span className="section-label"><Sparkles size={14} /> Built by interns, for interns</span><h1>Find answers. <span>Share experience.</span></h1><p>Real internship questions and practical answers from students who have been there.</p><div className="landing-buttons"><Link className="cta-button" to="/faqs"><Search size={16} /> Browse FAQs</Link><Link className="outline-button" to="/faqs/ask"><Plus size={16} /> Ask a Question</Link></div></div>
+      <aside className="hero-community-card">
+        <div className="hero-community-stats">{stats.map(([value, label]) => <div className="hero-community-stat" key={label}><b>{value}</b><span>{label}</span></div>)}</div>
+        <div className="hero-trending"><small><TrendingUp size={13} /> Trending Right Now</small><div className="hero-topic-list">{landingData?.trendingTopics.map((topic, index) => <Link className={`hero-topic topic-${index + 1}`} key={topic.category} to={`/faqs?${queryString({ category: topic.category })}`}>{topic.category}<span>{topic.count}</span></Link>)}{landingData && !landingData.trendingTopics.length && <em>No topics yet</em>}</div></div>
+      </aside>
+    </section>
+    <section className="landing-guide"><div><span className="section-label"><Sparkles size={14} /> Community-powered guidance</span><h2>Start with shared experience.</h2><p>Browse practical answers from interns or ask the community when your question is new.</p></div><div className="landing-action-grid"><Link className="landing-action featured" to="/faqs/ask"><Plus size={19} /><h3>Ask a Question</h3><p>Got a doubt? The community has your back.</p><span>Post now <ArrowRight size={14} /></span></Link><Link className="landing-action" to="/faqs"><Search size={19} /><h3>Browse FAQs</h3><p>Explore answers shared by students with real experience.</p><span>Explore FAQs <ArrowRight size={14} /></span></Link></div></section>
+  </main></Shell>;
+}
+
 function FeedPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [faqs, setFaqs] = useState([]);
@@ -343,13 +377,14 @@ function FeedPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [filters, setFilters] = useState({ categories: [], company: "", role: "", status: "all", sort: "latest" });
+  const [filters, setFilters] = useState({ categories: categoriesFromParams(searchParams), company: "", role: "", status: "all", sort: "latest" });
   const latestRequest = useRef(0);
   const debouncedSearch = useDebounced(search, 400);
   const debouncedCompany = useDebounced(filters.company, 400);
   const debouncedRole = useDebounced(filters.role, 400);
   const toast = useToast();
   const urlSearch = searchParams.get("search") ?? "";
+  const urlCategory = searchParams.get("category") ?? "";
   const filterKey = JSON.stringify({ search: debouncedSearch, company: debouncedCompany, role: debouncedRole, categories: filters.categories, status: filters.status, sort: filters.sort });
   async function fetchFaqs(nextPage = 1, append = false) {
     const requestId = ++latestRequest.current;
@@ -372,8 +407,8 @@ function FeedPage() {
   useEffect(() => { fetchFaqs(); }, [filterKey]);
   useEffect(() => {
     setSearch(urlSearch);
-    setFilters((current) => ({ ...current, categories: [], company: "", role: "", status: "all" }));
-  }, [urlSearch]);
+    setFilters((current) => ({ ...current, categories: categoriesFromParams(searchParams), company: "", role: "", status: "all" }));
+  }, [urlSearch, urlCategory]);
   function toggleCategory(category) {
     setFilters((current) => ({ ...current, categories: current.categories.includes(category) ? current.categories.filter((item) => item !== category) : [...current.categories, category] }));
   }
@@ -384,7 +419,6 @@ function FeedPage() {
   }
   return (
     <Shell>
-      <section className="feed-hero"><div><span className="section-label"><Sparkles size={14} /> Built by interns, for interns</span><h1>Find answers. <span>Share experience.</span></h1><p>Real internship questions and practical answers from students who have been there.</p></div></section>
       <main className="page-content">
         <div className="section-heading"><div><span className="section-label"><MessageCircle size={14} /> Community knowledge</span><h2>Internship FAQs</h2></div><button className="filter-mobile" onClick={() => setFiltersOpen(!filtersOpen)}><Filter size={16} /> Filters</button></div>
         <div className="feed-layout">
@@ -566,6 +600,15 @@ function FaqDetailPage() {
     await navigator.clipboard.writeText(window.location.href);
     toast("Link copied to clipboard!");
   }
+  async function deleteFaq() {
+    if (faq.answerCount > 0) return toast("Answered FAQs require admin permission to delete");
+    if (!window.confirm("Delete this unanswered FAQ?")) return;
+    try {
+      await remove(`/faqs/${id}`);
+      toast("FAQ deleted");
+      navigate("/faqs");
+    } catch (error) { toast(error.message); }
+  }
   if (!faq) return <Shell><PageLoader /></Shell>;
   const ownsFaq = auth.user?._id === faq.author?._id;
   return <Shell><main className="detail-page">
@@ -573,11 +616,11 @@ function FaqDetailPage() {
       <div className="faq-topline"><span className="topic-badge violet">{faq.category}</span>{faq.company && <span className="mini-chip">{faq.company}</span>}{faq.role && <span className="mini-chip">{faq.role}</span>}<span className={`status ${faq.status}`}><i />{faq.status}</span></div>
       <h1>{faq.title}</h1><p className="detail-copy">{faq.description}</p><div className="tag-row">{faq.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
       <div className="detail-meta"><AuthorIdentity item={faq} meta={`${faq.author?.reputation ?? 0} reputation - asked ${relativeTime(faq.createdAt)}`} /><span><Eye size={15} /> {faq.viewCount} views</span></div>
-      <div className="detail-actions"><button className={faq.upvoted ? "active" : ""} onClick={() => toggleFaqAction("upvote")}><ArrowUp size={16} /> {faq.upvotes} Upvote</button><button className={faq.saved ? "active" : ""} onClick={() => toggleFaqAction("save")}><Bookmark size={16} /> {faq.saved ? "Saved" : "Save"}</button><button className={faq.followed ? "active" : ""} onClick={toggleFollow}>{faq.followed ? <UserCheck size={16} /> : <UserPlus size={16} />} {faq.followed ? "Following" : "Follow"}</button><button onClick={share}><Link2 size={16} /> Share</button><button onClick={() => requireLogin() && setReport({ type: "faq", id })}><CircleAlert size={16} /> Report</button></div>
+      <div className="detail-actions"><button className={faq.upvoted ? "active" : ""} onClick={() => toggleFaqAction("upvote")}><ArrowUp size={16} /> {faq.upvotes} Upvote</button><button className={faq.saved ? "active" : ""} onClick={() => toggleFaqAction("save")}><Bookmark size={16} /> {faq.saved ? "Saved" : "Save"}</button><button className={faq.followed ? "active" : ""} onClick={toggleFollow}>{faq.followed ? <UserCheck size={16} /> : <UserPlus size={16} />} {faq.followed ? "Following" : "Follow"}</button><button onClick={share}><Link2 size={16} /> Share</button><button onClick={() => requireLogin() && setReport({ type: "faq", id })}><CircleAlert size={16} /> Report</button>{ownsFaq && <button className="danger" title={faq.answerCount > 0 ? "Answered FAQs require admin permission to delete" : "Delete this unanswered FAQ"} onClick={deleteFaq}><Trash2 size={16} /> Delete FAQ</button>}</div>
     </section>
     <section className="surface summary-box"><span className="section-label"><Bot size={15} /> AI summary</span>{faq.aiSummary ? <><p>{faq.aiSummary}</p><small>Generated from verified community answers - updated {relativeTime(faq.aiSummaryUpdatedAt)}</small></> : <p>An AI summary will appear after an admin verifies a community answer.</p>}<small>Updates automatically when verified answers change.</small></section>
     <section className="answers-section"><div className="answers-heading"><h2>{faq.answerCount} Answers</h2><select value={sort} onChange={(event) => setSort(event.target.value)}><option value="upvoted">Most upvoted</option><option value="newest">Newest</option><option value="oldest">Oldest</option></select></div>
-      {answers.map((answer) => <AnswerCard key={answer._id} answer={answer} ownsFaq={ownsFaq} onReload={loadAnswers} onReport={() => setReport({ type: "answer", id: answer._id })} />)}
+      {answers.map((answer) => <AnswerCard key={answer._id} answer={answer} ownsFaq={ownsFaq} onReload={() => Promise.all([loadFaq(), loadAnswers()])} onReport={() => setReport({ type: "answer", id: answer._id })} />)}
       {!answers.length && <div className="surface empty-state"><MessageCircle size={28} /><h3>No answers yet</h3><p>Be the first to help this student.</p></div>}
     </section>
     <section className="surface answer-form" id="answer"><h2>Write Your Answer</h2>{ownsFaq ? <p className="answer-restriction">You cannot answer your own FAQ.</p> : auth.user ? <form onSubmit={submitAnswer}><textarea required minLength="20" maxLength="5000" value={answerBody} onChange={(event) => setAnswerBody(event.target.value)} placeholder="Share a clear, practical answer..." /><div className="answer-form-footer"><label className="check-label"><input type="checkbox" checked={anonymous} onChange={(event) => setAnonymous(event.target.checked)} /> Answer anonymously</label><small>{answerBody.length}/5000</small><button className="primary-button" disabled={busy}>{busy ? "Posting..." : "Post answer"}</button></div></form> : <div className="login-prompt">You must be logged in to post an answer. <Link className="outline-button" to="/login" state={{ from: `/faqs/${id}` }}>Login</Link></div>}</section>
@@ -594,6 +637,7 @@ function AnswerCard({ answer, ownsFaq, onReload, onReport }) {
   const [expanded, setExpanded] = useState(false);
   const name = authorName(answer);
   const hasLongAnswer = answer.body.length > 320;
+  const ownsAnswer = auth.user?._id === answer.author?._id;
   const upvoted = answer.upvotedBy.includes(auth.user?._id);
   const downvoted = answer.downvotedBy.includes(auth.user?._id);
   async function vote(type) {
@@ -615,7 +659,16 @@ function AnswerCard({ answer, ownsFaq, onReload, onReport }) {
       onReload();
     } catch (error) { toast(error.message); } finally { setCommentBusy(false); }
   }
-  return <article className={`surface answer-card ${answer.isAccepted ? "accepted" : ""}`}>{answer.isAccepted && <div className="best-answer"><CheckCircle2 size={15} /> Best Answer</div>}<div className="answer-card-header"><AuthorIdentity item={answer} color="green" meta={`${answer.author?.reputation ?? 0} reputation - answered ${relativeTime(answer.createdAt)}`} /><span className={`verification-badge ${answer.isVerified ? "verified" : "unverified"}`}>{answer.isVerified ? <CheckCircle2 size={13} /> : <CircleAlert size={13} />}{answer.isVerified ? "Verified" : "Unverified"}</span></div><p className={`answer-body ${hasLongAnswer && !expanded ? "collapsed" : ""}`}>{answer.body}</p>{hasLongAnswer && <button className="answer-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show more"} <ChevronDown size={14} /></button>}<div className="answer-actions"><button className={upvoted ? "active" : ""} onClick={() => vote("upvote")}><ArrowUp size={15} /> {answer.upvotes}</button><button className={downvoted ? "active" : ""} onClick={() => vote("downvote")}><ArrowDown size={15} /> {answer.downvotes}</button>{ownsFaq && <button disabled={!answer.isVerified} title={answer.isVerified ? "Mark as Best Answer" : "Admin verification required"} onClick={accept}><Check size={15} /> Accept</button>}<button onClick={onReport}><CircleAlert size={15} /> Report</button></div><div className="comment-thread">{answer.comments?.map((item) => <div className="comment" key={item._id}>{item.author?._id ? <Link to={`/profile/${item.author._id}`}><b>{item.author.name}</b></Link> : <b>Student</b>}<span>{item.body}</span><small>{relativeTime(item.createdAt)}</small></div>)}{ownsFaq ? <p className="comment-restriction">You cannot comment on your own FAQ.</p> : <form className="comment-form" onSubmit={postComment}><input required minLength="2" maxLength="500" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a comment or mention @FirstName..." /><button disabled={commentBusy || !comment.trim()}><Send size={14} /></button></form>}</div></article>;
+  async function deleteAnswer() {
+    if (answer.isVerified) return toast("Verified answers require admin permission to delete");
+    if (!window.confirm("Delete your answer?")) return;
+    try {
+      await remove(`/answers/${answer._id}`);
+      toast("Answer deleted");
+      onReload();
+    } catch (error) { toast(error.message); }
+  }
+  return <article className={`surface answer-card ${answer.isAccepted ? "accepted" : ""}`}>{answer.isAccepted && <div className="best-answer"><CheckCircle2 size={15} /> Best Answer</div>}<div className="answer-card-header"><AuthorIdentity item={answer} color="green" meta={`${answer.author?.reputation ?? 0} reputation - answered ${relativeTime(answer.createdAt)}`} /><span className={`verification-badge ${answer.isVerified ? "verified" : "unverified"}`}>{answer.isVerified ? <CheckCircle2 size={13} /> : <CircleAlert size={13} />}{answer.isVerified ? "Verified" : "Unverified"}</span></div><p className={`answer-body ${hasLongAnswer && !expanded ? "collapsed" : ""}`}>{answer.body}</p>{hasLongAnswer && <button className="answer-toggle" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>{expanded ? "Show less" : "Show more"} <ChevronDown size={14} /></button>}<div className="answer-actions"><button className={upvoted ? "active" : ""} onClick={() => vote("upvote")}><ArrowUp size={15} /> {answer.upvotes}</button><button className={downvoted ? "active" : ""} onClick={() => vote("downvote")}><ArrowDown size={15} /> {answer.downvotes}</button>{ownsFaq && <button disabled={!answer.isVerified} title={answer.isVerified ? "Mark as Best Answer" : "Admin verification required"} onClick={accept}><Check size={15} /> Accept</button>}<button onClick={onReport}><CircleAlert size={15} /> Report</button>{ownsAnswer && <button className="danger" title={answer.isVerified ? "Verified answers require admin permission to delete" : "Delete your answer"} onClick={deleteAnswer}><Trash2 size={15} /> Delete</button>}</div><div className="comment-thread">{answer.comments?.map((item) => <div className="comment" key={item._id}>{item.author?._id ? <Link to={`/profile/${item.author._id}`}><b>{item.author.name}</b></Link> : <b>Student</b>}<span>{item.body}</span><small>{relativeTime(item.createdAt)}</small></div>)}{ownsFaq ? <p className="comment-restriction">You cannot comment on your own FAQ.</p> : <form className="comment-form" onSubmit={postComment}><input required minLength="2" maxLength="500" value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a comment or mention @FirstName..." /><button disabled={commentBusy || !comment.trim()}><Send size={14} /></button></form>}</div></article>;
 }
 
 function ReportModal({ report, onClose }) {
@@ -744,7 +797,7 @@ function AdminTable({ headings, children }) {
 
 function App() {
   return <ToastProvider><Routes>
-    <Route path="/" element={<Navigate to="/faqs" replace />} />
+    <Route path="/" element={<LandingPage />} />
     <Route path="/login" element={<AuthPage />} />
     <Route path="/register" element={<AuthPage register />} />
     <Route path="/admin/login" element={<AdminLogin />} />

@@ -342,6 +342,33 @@ function adminOnly(request, response, next) {
 app.get("/api/health", (_request, response) => {
   ok(response, { status: "ok", database: mongoose.connection.readyState === 1 ? "connected" : "disconnected" });
 });
+app.get("/api/landing-stats", async (_request, response, next) => {
+  try {
+    const [questionsAsked, internsHelped, companies, answeredFaqs, trendingTopics] = await Promise.all([
+      Faq.countDocuments(),
+      User.countDocuments({ role: "student" }),
+      Faq.distinct("company", { company: { $exists: true, $nin: ["", null] } }),
+      Faq.countDocuments({ answerCount: { $gt: 0 } }),
+      Faq.aggregate([
+        { $group: { _id: "$category", count: { $sum: 1 } } },
+        { $sort: { count: -1, _id: 1 } },
+        { $limit: 8 },
+      ]),
+    ]);
+    const companiesCovered = new Set(companies.map((company) => String(company).trim().toLowerCase()).filter(Boolean)).size;
+    return ok(response, {
+      stats: {
+        questionsAsked,
+        internsHelped,
+        companiesCovered,
+        answeredRate: questionsAsked ? Math.round((answeredFaqs / questionsAsked) * 100) : 0,
+      },
+      trendingTopics: trendingTopics.map((topic) => ({ category: topic._id, count: topic.count })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 app.post("/api/chatbot", async (request, response, next) => {
   try {
     const message = String(request.body.message ?? "").trim();
@@ -605,6 +632,26 @@ app.post("/api/faqs/:id/report", authenticate, async (request, response, next) =
     if (!await Faq.exists({ _id: request.params.id })) return fail(response, 404, "FAQ not found");
     const report = await Report.create({ contentType: "faq", contentModel: "Faq", content: request.params.id, reporter: request.user.id, reason: request.body.reason });
     return ok(response, { report }, 201);
+  } catch (error) {
+    next(error);
+  }
+});
+app.delete("/api/faqs/:id", authenticate, async (request, response, next) => {
+  try {
+    const faq = await Faq.findById(request.params.id);
+    if (!faq) return fail(response, 404, "FAQ not found");
+    if (!faq.author.equals(request.user.id)) return fail(response, 403, "You can only delete your own FAQ");
+    if (faq.answerCount > 0 || await Answer.exists({ faq: faq.id })) {
+      return fail(response, 403, "Answered FAQs require admin permission to delete");
+    }
+    await faq.deleteOne();
+    await Promise.all([
+      Report.deleteMany({ contentType: "faq", content: faq.id }),
+      Notification.deleteMany({ faq: faq.id }),
+      User.updateMany({}, { $pull: { savedFaqs: faq.id } }),
+      User.findByIdAndUpdate(faq.author, { $inc: { questionsAsked: -1 } }),
+    ]);
+    return ok(response, { deleted: true });
   } catch (error) {
     next(error);
   }
@@ -963,12 +1010,23 @@ app.delete("/api/admin/faqs/:id", authenticate, adminOnly, async (request, respo
     next(error);
   }
 });
-app.delete("/api/answers/:id", authenticate, adminOnly, async (request, response, next) => {
+app.delete("/api/answers/:id", authenticate, async (request, response, next) => {
   try {
-    const answer = await Answer.findByIdAndDelete(request.params.id);
+    const answer = await Answer.findById(request.params.id);
     if (!answer) return fail(response, 404, "Answer not found");
+    const isAdmin = request.user.role === "admin";
+    if (!isAdmin && !answer.author.equals(request.user.id)) return fail(response, 403, "You can only delete your own answer");
+    if (!isAdmin && answer.isVerified) return fail(response, 403, "Verified answers require admin permission to delete");
+    await answer.deleteOne();
     await Report.deleteMany({ contentType: "answer", content: answer.id });
     await Notification.deleteMany({ answer: answer.id });
+    await User.findByIdAndUpdate(answer.author, {
+      $inc: {
+        answersGiven: -1,
+        reputation: answer.isAccepted ? -35 : -10,
+        ...(answer.isAccepted && { acceptedAnswers: -1 }),
+      },
+    });
     const faq = await Faq.findById(answer.faq);
     if (faq) {
       faq.answerCount = Math.max(0, faq.answerCount - 1);
