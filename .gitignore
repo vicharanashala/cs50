@@ -4,4 +4,7 @@ dist/
 .env.*
 !.env.example
 npm-debug.log*
+*.log
+*.stderr.log
+*.stdout.log
 

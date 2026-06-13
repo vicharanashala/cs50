@@ -77,9 +77,12 @@ const faqSchema = new mongoose.Schema(
     isAnonymous: { type: Boolean, default: false },
     upvotes: { type: Number, default: 0 },
     upvotedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
+    downvotes: { type: Number, default: 0 },
+    downvotedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     followers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     answerCount: { type: Number, default: 0 },
     viewCount: { type: Number, default: 0 },
+    viewedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     status: { type: String, enum: ["open", "answered", "closed"], default: "open" },
     isTrending: { type: Boolean, default: false },
     aiSummary: String,
@@ -109,6 +112,8 @@ const answerSchema = new mongoose.Schema(
       {
         author: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         body: { type: String, trim: true, maxlength: 500 },
+        upvotes: { type: Number, default: 0 },
+        upvotedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
         createdAt: { type: Date, default: Date.now },
       },
     ],
@@ -509,15 +514,46 @@ app.patch("/api/notifications/read-all", authenticate, async (request, response,
     next(error);
   }
 });
+app.patch("/api/notifications/:id/read", authenticate, async (request, response, next) => {
+  try {
+    const notification = await Notification.findOneAndUpdate(
+      { _id: request.params.id, recipient: request.user.id, read: false },
+      { read: true },
+      { new: true },
+    );
+    if (!notification) return fail(response, 404, "Notification not found or already read");
+    return ok(response, { notification });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/faqs/similar", async (request, response, next) => {
   try {
     const title = String(request.query.title ?? "").trim();
     if (title.length < 5) return ok(response, { faqs: [] });
     const words = title.split(/\s+/).filter((word) => word.length > 3).slice(0, 5);
-    const filter = words.length ? { title: new RegExp(words.map(escapeRegex).join("|"), "i") } : { title: new RegExp(escapeRegex(title), "i") };
-    const faqs = await publicFaqQuery(Faq.find(filter).select("title category author").limit(5)).lean();
-    return ok(response, { faqs });
+    if (!words.length) return ok(response, { faqs: [] });
+    const pattern = new RegExp(words.map(escapeRegex).join("|"), "i");
+    const candidates = await Faq.find({ $or: [{ title: pattern }, { description: pattern }, { tags: pattern }] })
+      .select("title description tags category author")
+      .populate("author", authorFields)
+      .lean();
+    const lowerWords = words.map((word) => word.toLowerCase());
+    const scored = candidates
+      .map((faq) => {
+        const text = `${faq.title} ${faq.description} ${faq.tags.join(" ")}`.toLowerCase();
+        const matchedAll = lowerWords.every((word) => text.includes(word));
+        const score = lowerWords.reduce((sum, word) => sum + (faq.title.toLowerCase().includes(word) ? 6 : 0)
+          + (faq.tags.join(" ").toLowerCase().includes(word) ? 4 : 0)
+          + (faq.description.toLowerCase().includes(word) ? 1 : 0), 0);
+        return { ...faq, score, matchedAll };
+      })
+      .filter((faq) => faq.matchedAll)
+      .sort((left, right) => right.score - left.score)
+      .slice(0, 5)
+      .map(({ score, matchedAll, ...rest }) => rest);
+    return ok(response, { faqs: scored });
   } catch (error) {
     next(error);
   }
@@ -552,11 +588,26 @@ app.get("/api/faqs", optionalAuth, async (request, response, next) => {
   }
 });
 
+const harmfulChecks = [
+  [(text) => (text.match(/https?:\/\/[^\s]+/gi) || []).length >= 3, "Remove some links — your content can include up to 2 URLs"],
+  [/<[^>]*script/i, "Remove HTML script tags from your content"],
+  [/[\ud800-\udfff]{4,}/, "Remove invalid characters from your content"],
+  [/(.)\1{30,}/, "Remove repeated characters from your content"],
+];
+function harmfulReason(text) {
+  if (!text) return null;
+  for (const [check, message] of harmfulChecks) {
+    if (typeof check === "function" ? check(text) : check.test(text)) return message;
+  }
+  return null;
+}
+
 app.post("/api/faqs", authenticate, async (request, response, next) => {
   try {
+    if (harmfulReason(request.body.title) || harmfulReason(request.body.description)) return fail(response, 400, harmfulReason(request.body.title) ?? harmfulReason(request.body.description));
     const tags = [...new Set((request.body.tags ?? []).map((tag) => String(tag).trim().toLowerCase()).filter(Boolean))];
     if (tags.length > 5) return fail(response, 400, "Please use no more than 5 tags", { tags: "Use no more than 5 tags" });
-    const faq = await Faq.create({ ...request.body, tags, author: request.user.id });
+    const faq = await Faq.create({ ...request.body, tags, author: request.user.id, followers: [request.user.id] });
     await User.findByIdAndUpdate(request.user.id, { $inc: { questionsAsked: 1 } });
     return ok(response, { faq: await publicFaqQuery(Faq.findById(faq.id)).lean() }, 201);
   } catch (error) {
@@ -571,16 +622,25 @@ app.get("/api/faqs/:id", optionalAuth, async (request, response, next) => {
     if (!faq) return fail(response, 404, "FAQ not found");
     const saved = request.user ? (request.user.savedFaqs ?? []).some((id) => id.equals(faq._id)) : false;
     const upvoted = request.user ? (faq.upvotedBy ?? []).some((id) => id.equals(request.user.id)) : false;
+    const downvoted = request.user ? (faq.downvotedBy ?? []).some((id) => id.equals(request.user.id)) : false;
     const followed = request.user ? (faq.followers ?? []).some((id) => id.equals(request.user.id)) : false;
-    return ok(response, { faq, saved, upvoted, followed });
+    return ok(response, { faq, saved, upvoted, downvoted, followed });
   } catch (error) {
     next(error);
   }
 });
-app.patch("/api/faqs/:id/view", async (request, response, next) => {
+app.patch("/api/faqs/:id/view", optionalAuth, async (request, response, next) => {
   try {
-    const faq = await Faq.findByIdAndUpdate(request.params.id, { $inc: { viewCount: 1 } }, { new: true });
-    return faq ? ok(response, { viewCount: faq.viewCount }) : fail(response, 404, "FAQ not found");
+    if (request.user) {
+      const faq = await Faq.findOneAndUpdate(
+        { _id: request.params.id, viewedBy: { $ne: request.user.id } },
+        { $push: { viewedBy: request.user.id }, $inc: { viewCount: 1 } },
+        { new: true },
+      );
+      return ok(response, { viewCount: faq ? faq.viewCount : (await Faq.findById(request.params.id).select("viewCount")).viewCount });
+    }
+    const existing = await Faq.findByIdAndUpdate(request.params.id, { $inc: { viewCount: 1 } }, { new: true });
+    return existing ? ok(response, { viewCount: existing.viewCount }) : fail(response, 404, "FAQ not found");
   } catch (error) {
     next(error);
   }
@@ -590,13 +650,41 @@ app.post("/api/faqs/:id/upvote", authenticate, async (request, response, next) =
     const faq = await Faq.findById(request.params.id);
     if (!faq) return fail(response, 404, "FAQ not found");
     faq.upvotedBy ??= [];
-    const index = faq.upvotedBy.findIndex((id) => id.equals(request.user.id));
-    if (index >= 0) faq.upvotedBy.splice(index, 1);
-    else faq.upvotedBy.push(request.user.id);
+    faq.downvotedBy ??= [];
+    const upIndex = faq.upvotedBy.findIndex((id) => id.equals(request.user.id));
+    const downIndex = faq.downvotedBy.findIndex((id) => id.equals(request.user.id));
+    if (upIndex >= 0) faq.upvotedBy.splice(upIndex, 1);
+    else {
+      faq.upvotedBy.push(request.user.id);
+      if (downIndex >= 0) faq.downvotedBy.splice(downIndex, 1);
+    }
     faq.upvotes = faq.upvotedBy.length;
+    faq.downvotes = faq.downvotedBy.length;
     updateTrending(faq);
     await faq.save();
-    return ok(response, { upvotes: faq.upvotes, upvoted: index < 0 });
+    return ok(response, { upvotes: faq.upvotes, downvotes: faq.downvotes, upvoted: upIndex < 0, downvoted: false });
+  } catch (error) {
+    next(error);
+  }
+});
+app.post("/api/faqs/:id/downvote", authenticate, async (request, response, next) => {
+  try {
+    const faq = await Faq.findById(request.params.id);
+    if (!faq) return fail(response, 404, "FAQ not found");
+    faq.upvotedBy ??= [];
+    faq.downvotedBy ??= [];
+    const downIndex = faq.downvotedBy.findIndex((id) => id.equals(request.user.id));
+    const upIndex = faq.upvotedBy.findIndex((id) => id.equals(request.user.id));
+    if (downIndex >= 0) faq.downvotedBy.splice(downIndex, 1);
+    else {
+      faq.downvotedBy.push(request.user.id);
+      if (upIndex >= 0) faq.upvotedBy.splice(upIndex, 1);
+    }
+    faq.upvotes = faq.upvotedBy.length;
+    faq.downvotes = faq.downvotedBy.length;
+    updateTrending(faq);
+    await faq.save();
+    return ok(response, { upvotes: faq.upvotes, downvotes: faq.downvotes, upvoted: false, downvoted: downIndex < 0 });
   } catch (error) {
     next(error);
   }
@@ -616,6 +704,7 @@ app.post("/api/faqs/:id/follow", authenticate, async (request, response, next) =
   try {
     const faq = await Faq.findById(request.params.id);
     if (!faq) return fail(response, 404, "FAQ not found");
+    if (faq.author.equals(request.user.id)) return fail(response, 400, "You cannot follow your own question");
     faq.followers ??= [];
     const followed = faq.followers.some((id) => id.equals(request.user.id));
     if (followed) faq.followers.pull(request.user.id);
@@ -656,6 +745,27 @@ app.delete("/api/faqs/:id", authenticate, async (request, response, next) => {
     next(error);
   }
 });
+app.patch("/api/faqs/:id", authenticate, async (request, response, next) => {
+  try {
+    const faq = await Faq.findById(request.params.id);
+    if (!faq) return fail(response, 404, "FAQ not found");
+    if (!faq.author.equals(request.user.id)) return fail(response, 403, "You can only edit your own FAQ");
+    if (harmfulReason(request.body.title) || harmfulReason(request.body.description)) return fail(response, 400, harmfulReason(request.body.title) ?? harmfulReason(request.body.description));
+    const allowed = ["title", "description", "category", "company", "role", "branch", "semester", "isAnonymous"];
+    for (const field of allowed) {
+      if (request.body[field] !== undefined) faq[field] = request.body[field];
+    }
+    if (request.body.tags) {
+      const tags = [...new Set(request.body.tags.map((tag) => String(tag).trim().toLowerCase()).filter(Boolean))];
+      if (tags.length > 5) return fail(response, 400, "Please use no more than 5 tags");
+      faq.tags = tags;
+    }
+    await faq.save();
+    return ok(response, { faq: await publicFaqQuery(Faq.findById(faq.id)).lean() });
+  } catch (error) {
+    next(error);
+  }
+});
 app.post("/api/faqs/:id/generate-summary", authenticate, async (request, response, next) => {
   try {
     const summary = await refreshFaqSummary(request.params.id);
@@ -684,12 +794,14 @@ app.post("/api/faqs/:faqId/answers", authenticate, async (request, response, nex
     const faq = await Faq.findById(request.params.faqId);
     if (!faq) return fail(response, 404, "FAQ not found");
     if (faq.author.equals(request.user.id)) return fail(response, 403, "You cannot answer your own FAQ");
+    if (harmfulReason(request.body.body)) return fail(response, 400, harmfulReason(request.body.body));
+    if (await Answer.exists({ faq: faq.id, author: request.user.id })) return fail(response, 400, "You have already answered this question");
     const answer = await Answer.create({ faq: faq.id, author: request.user.id, body: request.body.body, isAnonymous: Boolean(request.body.isAnonymous) });
     faq.answerCount += 1;
     if (faq.status === "open") faq.status = "answered";
     updateTrending(faq);
     await faq.save();
-    await User.findByIdAndUpdate(request.user.id, { $inc: { answersGiven: 1, reputation: 10 } });
+    await User.findByIdAndUpdate(request.user.id, { $inc: { answersGiven: 1 } });
     await Promise.all([
       notify({
         recipient: faq.author,
@@ -790,6 +902,40 @@ app.post("/api/answers/:id/comments", authenticate, async (request, response, ne
     next(error);
   }
 });
+app.delete("/api/answers/:id/comments/:commentId", authenticate, async (request, response, next) => {
+  try {
+    const answer = await Answer.findById(request.params.id);
+    if (!answer) return fail(response, 404, "Answer not found");
+    const comment = answer.comments.id(request.params.commentId);
+    if (!comment) return fail(response, 404, "Comment not found");
+    if (!comment.author || !comment.author.equals(request.user.id)) {
+      return fail(response, 403, "You can only delete your own comment");
+    }
+    comment.deleteOne();
+    await answer.save();
+    return ok(response, { answer: await publicAnswerQuery(Answer.findById(answer.id)).lean() });
+  } catch (error) {
+    next(error);
+  }
+});
+app.post("/api/answers/:id/comments/:commentId/upvote", authenticate, async (request, response, next) => {
+  try {
+    const answer = await Answer.findById(request.params.id);
+    if (!answer) return fail(response, 404, "Answer not found");
+    const comment = answer.comments.id(request.params.commentId);
+    if (!comment) return fail(response, 404, "Comment not found");
+    comment.upvotedBy ??= [];
+    const index = comment.upvotedBy.findIndex((id) => id.equals(request.user.id));
+    if (index >= 0) comment.upvotedBy.splice(index, 1);
+    else comment.upvotedBy.push(request.user.id);
+    comment.upvotes = comment.upvotedBy.length;
+    await answer.save();
+    const updated = await publicAnswerQuery(Answer.findById(answer.id)).lean();
+    return ok(response, { answer: updated });
+  } catch (error) {
+    next(error);
+  }
+});
 app.patch("/api/answers/:id/accept", authenticate, async (request, response, next) => {
   try {
     const answer = await Answer.findById(request.params.id);
@@ -804,7 +950,11 @@ app.patch("/api/answers/:id/accept", authenticate, async (request, response, nex
       await User.findByIdAndUpdate(previous.author, { $inc: { reputation: -25, acceptedAnswers: -1 } });
     }
     let newlyAccepted = false;
-    if (!answer.isAccepted) {
+    if (answer.isAccepted) {
+      answer.isAccepted = false;
+      await answer.save();
+      await User.findByIdAndUpdate(answer.author, { $inc: { reputation: -25, acceptedAnswers: -1 } });
+    } else {
       answer.isAccepted = true;
       await answer.save();
       await User.findByIdAndUpdate(answer.author, { $inc: { reputation: 25, acceptedAnswers: 1 } });
@@ -823,7 +973,7 @@ app.patch("/api/answers/:id/accept", authenticate, async (request, response, nex
       }),
       sendEmail(answer.author, "Your CrowdFAQ answer was accepted", `Your answer to "${faq.title}" was marked as Best Answer.`),
     ]);
-    return ok(response, { answer });
+    return ok(response, { answer, accepted: answer.isAccepted });
   } catch (error) {
     next(error);
   }
@@ -887,7 +1037,7 @@ app.post("/api/users/:id/follow", authenticate, async (request, response, next) 
     return ok(response, {
       followed: !followed,
       followerCount: profile.followers.length,
-      followingCount: profile.following?.length ?? 0,
+      viewerFollowingCount: request.user.following?.length ?? 0,
     });
   } catch (error) {
     next(error);
@@ -983,6 +1133,7 @@ app.patch("/api/admin/answers/:id/verify", authenticate, adminOnly, async (reque
     if (!answer) return fail(response, 404, "Answer not found");
     answer.isVerified = !answer.isVerified;
     await answer.save();
+    await User.findByIdAndUpdate(answer.author, { $inc: { reputation: answer.isVerified ? 10 : -10 } });
     let summaryRefresh;
     try {
       summaryRefresh = { updated: true, ...await refreshFaqSummary(answer.faq) };
@@ -1041,6 +1192,21 @@ app.delete("/api/answers/:id", authenticate, async (request, response, next) => 
       }
     }
     return ok(response, { deleted: true });
+  } catch (error) {
+    next(error);
+  }
+});
+app.patch("/api/answers/:id", authenticate, async (request, response, next) => {
+  try {
+    const answer = await Answer.findById(request.params.id);
+    if (!answer) return fail(response, 404, "Answer not found");
+    if (!answer.author.equals(request.user.id)) return fail(response, 403, "You can only edit your own answer");
+    if (answer.isVerified) return fail(response, 403, "Verified answers require admin permission to edit");
+    if (harmfulReason(request.body.body)) return fail(response, 400, harmfulReason(request.body.body));
+    if (request.body.body !== undefined) answer.body = request.body.body;
+    if (request.body.isAnonymous !== undefined) answer.isAnonymous = Boolean(request.body.isAnonymous);
+    await answer.save();
+    return ok(response, { answer: await publicAnswerQuery(Answer.findById(answer.id)).lean() });
   } catch (error) {
     next(error);
   }
