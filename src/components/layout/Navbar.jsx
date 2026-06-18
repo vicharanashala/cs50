@@ -48,7 +48,7 @@ export default function Navbar() {
                 <Link className="ask-button" to="/faqs/ask"><Plus size={17} /><span>Ask a Question</span></Link>
                 <Link className="profile-btn" to="/profile" onClick={closeMenu}>
                   <span className="avatar avatar-blue">{initials(auth.user.name)}</span>
-                  <span className="profile-copy"><b>{auth.user.name}</b><small>{auth.user.reputation} rep</small></span>
+                  <span className="profile-copy"><b>{auth.user.name}</b>{!auth.isAdmin && <small>{auth.user.reputation} rep</small>}</span>
                 </Link>
                 <button className="icon-btn" title="Logout" onClick={() => setShowLogoutConfirm(true)}><LogOut size={18} /></button>
               </>

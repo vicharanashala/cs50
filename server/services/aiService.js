@@ -18,19 +18,38 @@ async function generateAiText(prompt, instructions) {
     if (!aiResponse.ok) throw new Error("AI_REQUEST_FAILED");
     return result.candidates?.[0]?.content?.parts?.map((part) => part.text).join("").trim();
   }
+  const useGroq = Boolean(process.env.GROQ_API_KEY);
+  if (useGroq) {
+    const aiResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
+        messages: [
+          { role: "system", content: instructions },
+          { role: "user", content: prompt }
+        ]
+      }),
+    });
+    const result = await aiResponse.json();
+    if (!aiResponse.ok) throw new Error("AI_REQUEST_FAILED");
+    return result.choices?.[0]?.message?.content;
+  }
   if (!process.env.OPENAI_API_KEY) throw new Error("AI_NOT_CONFIGURED");
-  const aiResponse = await fetch("https://api.openai.com/v1/responses", {
+  const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model,
-      instructions,
-      input: prompt,
+      model: model || "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: instructions },
+        { role: "user", content: prompt }
+      ]
     }),
   });
   const result = await aiResponse.json();
   if (!aiResponse.ok) throw new Error("AI_REQUEST_FAILED");
-  return result.output_text ?? result.output?.flatMap((item) => item.content ?? []).find((item) => item.type === "output_text")?.text;
+  return result.choices?.[0]?.message?.content;
 }
 
 export async function refreshFaqSummary(faqId) {

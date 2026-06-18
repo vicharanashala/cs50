@@ -1,6 +1,6 @@
 import React from "react";
 import { useState } from "react";
-import { ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, CircleAlert, Heart, Pencil, Send, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, CheckCircle2, ChevronDown, CircleAlert, Heart, Pencil, Reply, Send, Trash2, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../AuthContext.jsx";
 import { useToast } from "../../hooks/useToast.jsx";
@@ -14,6 +14,7 @@ export default function AnswerCard({ answer, ownsFaq, onReload, onReport }) {
   const navigate = useNavigate();
   const toast = useToast();
   const [comment, setComment] = useState("");
+  const [replyingTo, setReplyingTo] = useState(null);
   const [commentBusy, setCommentBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -41,14 +42,15 @@ export default function AnswerCard({ answer, ownsFaq, onReload, onReport }) {
       toast(error.message, "error");
     }
   }
-  async function postComment(event) {
+  async function postComment(event, replyToId = null) {
     event.preventDefault();
     if (!auth.user) return navigate("/login", { state: { message: "Please login to continue" } });
     if (ownsFaq) return toast("You cannot comment on your own FAQ", "warning");
     setCommentBusy(true);
     try {
-      await post(`/answers/${answer._id}/comments`, { body: comment });
+      await post(`/answers/${answer._id}/comments`, { body: comment, replyTo: replyToId });
       setComment("");
+      setReplyingTo(null);
       toast("Comment posted", "success");
       onReload();
     } catch (error) {
@@ -82,6 +84,20 @@ export default function AnswerCard({ answer, ownsFaq, onReload, onReport }) {
     try {
       await remove(`/answers/${answer._id}`);
       toast("Answer deleted", "info");
+      onReload();
+    } catch (error) {
+      toast(error.message, "error");
+    }
+  }
+  async function verifyAnswer() {
+    try {
+      const data = await patch(`/admin/answers/${answer._id}/verify`);
+      toast(
+        data.summaryRefresh?.updated 
+          ? (data.answer.isVerified ? "Answer verified and AI summary updated" : "Answer marked unverified and AI summary refreshed")
+          : (data.answer.isVerified ? "Answer verified, but AI summary could not update" : "Answer marked unverified"),
+        "success"
+      );
       onReload();
     } catch (error) {
       toast(error.message, "error");
@@ -126,27 +142,62 @@ export default function AnswerCard({ answer, ownsFaq, onReload, onReport }) {
       <div className="answer-actions">
         <button className={upvoted ? "active" : ""} onClick={() => vote("upvote")}><ArrowUp size={15} /> {answer.upvotes}</button>
         <button className={downvoted ? "active" : ""} onClick={() => vote("downvote")}><ArrowDown size={15} /> {answer.downvotes}</button>
-        {ownsFaq && <button disabled={!answer.isVerified} title={answer.isAccepted ? "Remove Best Answer" : answer.isVerified ? "Mark as Best Answer" : "Admin verification required"} onClick={accept}>{answer.isAccepted ? <X size={15} /> : <Check size={15} />}{answer.isAccepted ? "Unaccept" : "Accept"}</button>}
+        {(ownsFaq || auth.user?.role === "admin") && <button disabled={!answer.isVerified} title={answer.isAccepted ? "Remove Best Answer" : answer.isVerified ? "Mark as Best Answer" : "Admin verification required"} onClick={accept}>{answer.isAccepted ? <X size={15} /> : <Check size={15} />}{answer.isAccepted ? "Unaccept" : "Accept"}</button>}
         <button title="Report" onClick={onReport}><CircleAlert size={15} /></button>
         {ownsAnswer && !answer.isVerified && <button title="Edit" onClick={() => { setEditBody(answer.body); setIsEditing(true); }}><Pencil size={15} /></button>}
         {ownsAnswer && <button className="danger" title={answer.isVerified ? "Verified answers require admin permission to delete" : "Delete your answer"} onClick={deleteAnswer}><Trash2 size={15} /></button>}
+        {auth.user?.role === "admin" && (
+          <button style={{ marginLeft: "auto" }} title={answer.isVerified ? "Unverify Answer" : "Verify Answer"} onClick={verifyAnswer}>
+            {answer.isVerified ? <X size={15} /> : <CheckCircle2 size={15} />}
+            {answer.isVerified ? "Unverify" : "Verify"}
+          </button>
+        )}
       </div>
       <div className="comment-thread">
-        {answer.comments?.map((item) => (
-          <div className="comment" key={item._id}>
-            <div className="comment-top">
-              <b>{authorName(item)}</b> <small>{relativeTime(item.createdAt)}</small>
-              <div className="comment-actions">
-                <button className={item.upvotedBy?.includes(auth.user?._id) ? "active" : ""} onClick={() => likeComment(item._id)}><Heart size={12} fill={item.upvotedBy?.includes(auth.user?._id) ? "currentColor" : "none"} /> {item.upvotes ?? 0}</button>
-                {auth.user?._id === item.author?._id && <button onClick={() => deleteComment(item._id)}><Trash2 size={12} /></button>}
+        {(() => {
+          const commentsTree = [];
+          const commentMap = {};
+          (answer.comments || []).forEach(c => commentMap[c._id] = { ...c, children: [] });
+          (answer.comments || []).forEach(c => {
+            if (c.replyTo && commentMap[c.replyTo]) {
+              commentMap[c.replyTo].children.push(commentMap[c._id]);
+            } else {
+              commentsTree.push(commentMap[c._id]);
+            }
+          });
+
+          const CommentNode = ({ item }) => (
+            <div className="comment-node">
+              <div className="comment" id={`comment-${item._id}`}>
+                <div className="comment-top">
+                  <b>{authorName(item)}</b> <small>{relativeTime(item.createdAt)}</small>
+                  <div className="comment-actions">
+                    <button title="Reply" onClick={() => { setReplyingTo(replyingTo === item._id ? null : item._id); setComment(""); }}><Reply size={12} /> Reply</button>
+                    <button className={item.upvotedBy?.includes(auth.user?._id) ? "active" : ""} onClick={() => likeComment(item._id)}><Heart size={12} fill={item.upvotedBy?.includes(auth.user?._id) ? "currentColor" : "none"} /> {item.upvotes ?? 0}</button>
+                    {auth.user?._id === item.author?._id && <button onClick={() => deleteComment(item._id)}><Trash2 size={12} /></button>}
+                  </div>
+                </div>
+                <p className="comment-body">{item.body}</p>
               </div>
+              {replyingTo === item._id && (
+                <form className="comment-form reply-form" onSubmit={(e) => postComment(e, item._id)}>
+                  <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Write a reply..." maxLength="500" required autoFocus />
+                  <button disabled={commentBusy || !comment.trim()} aria-label="Post reply"><Send size={14} /></button>
+                </form>
+              )}
+              {item.children.length > 0 && (
+                <div className="comment-replies">
+                  {item.children.map(child => <CommentNode key={child._id} item={child} />)}
+                </div>
+              )}
             </div>
-            <p className="comment-body">{item.body}</p>
-          </div>
-        ))}
+          );
+
+          return commentsTree.map(item => <CommentNode key={item._id} item={item} />);
+        })()}
       </div>
-      <form className="comment-form" onSubmit={postComment}>
-        <input value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a comment..." maxLength="500" required />
+      <form className="comment-form" onSubmit={(e) => postComment(e, null)}>
+        <input value={replyingTo ? "" : comment} onChange={(event) => { if (replyingTo) setReplyingTo(null); setComment(event.target.value); }} placeholder="Add a comment..." maxLength="500" required />
         <button disabled={commentBusy || !comment.trim()} aria-label="Post comment"><Send size={14} /></button>
       </form>
     </article>

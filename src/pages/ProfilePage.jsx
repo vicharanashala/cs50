@@ -99,7 +99,7 @@ export default function ProfilePage() {
           </div>
           {own
             ? <button className="outline-button" onClick={() => setEditing(!editing)}><Pencil size={15} /> Edit profile</button>
-            : !isAdmin && (
+            : !isAdmin && !auth.isAdmin && (
                 <button className={`outline-button ${followedByViewer ? "active" : ""}`} onClick={toggleProfileFollow}>
                   {followedByViewer ? <UserCheck size={15} /> : <UserPlus size={15} />}
                   {followedByViewer ? "Following" : "Follow student"}

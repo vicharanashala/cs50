@@ -7,7 +7,6 @@ import { initials } from "../utils/string.js";
 import Shell from "../components/layout/Shell.jsx";
 import PageLoader from "../components/ui/PageLoader.jsx";
 
-const rankIcons = [Trophy, Medal, Medal];
 const rankColors = ["gold", "silver", "bronze"];
 
 export default function LeaderboardPage() {
@@ -31,13 +30,11 @@ export default function LeaderboardPage() {
         </div>
         <div className="surface" style={{ overflow: "hidden" }}>
           {users.map((user, index) => {
-            const RankIcon = rankIcons[index];
             return (
               <Link to={`/profile/${user._id}`} className="leaderboard-row" key={user._id}>
-                <span className="leaderboard-rank">
-                  {RankIcon ? <RankIcon size={18} className={`rank-${rankColors[index]}`} /> : <b>#{index + 1}</b>}
+                <span className={`leaderboard-rank ${index < 3 ? `rank-${rankColors[index]}` : "rank-other"}`}>
+                  {index + 1}
                 </span>
-                <span className="avatar avatar-blue">{initials(user.name)}</span>
                 <span className="leaderboard-info">
                   <b>{user.name}</b>
                   <small>{user.branch || "No branch"}{user.semester ? ` · Sem ${user.semester}` : ""}</small>
