@@ -82,8 +82,20 @@ router.patch("/api/users/:id", authenticate, async (request, response, next) => 
   try {
     if (!request.user._id.equals(request.params.id)) return fail(response, 403, "You can only edit your own profile");
     const allowed = ["name", "branch", "semester", "bio"];
-    const changes = Object.fromEntries(allowed.filter((field) => request.body[field] !== undefined).map((field) => [field, request.body[field]]));
-    const user = await User.findByIdAndUpdate(request.user.id, changes, { new: true, runValidators: true }).select(userFields);
+    const setFields = {};
+    const unsetFields = {};
+    for (const field of allowed) {
+      if (request.body[field] === null) {
+        unsetFields[field] = "";
+      } else if (request.body[field] !== undefined) {
+        setFields[field] = request.body[field];
+      }
+    }
+    const updateOp = {
+      ...(Object.keys(setFields).length && { $set: setFields }),
+      ...(Object.keys(unsetFields).length && { $unset: unsetFields }),
+    };
+    const user = await User.findByIdAndUpdate(request.user.id, updateOp, { new: true, runValidators: true }).select(userFields);
     return ok(response, { user });
   } catch (error) {
     next(error);

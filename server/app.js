@@ -43,10 +43,12 @@ app.use(chatbotRouter);
 app.use(tagsRouter);
 app.use(adminRouter);
 
-app.use(express.static(path.resolve(__dirname, "..", "dist")));
-app.get("*", (_request, response) => {
-  response.sendFile(path.resolve(__dirname, "..", "dist", "index.html"));
-});
+if (process.env.NODE_ENV === "production") {
+  app.use(express.static(path.resolve(__dirname, "..", "dist")));
+  app.get("*", (_request, response) => {
+    response.sendFile(path.resolve(__dirname, "..", "dist", "index.html"));
+  });
+}
 
 app.use((error, _request, response, _next) => {
   console.error("Unhandled error:", error.message);

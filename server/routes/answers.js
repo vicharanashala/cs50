@@ -54,7 +54,7 @@ router.post("/api/faqs/:faqId/answers", authenticate, validate(answerSchema), as
         faq: faq.id,
         answer: answer.id,
       }),
-      sendEmail(faq.author, "Your CrowdFAQ question received an answer", `${request.user.name} answered: ${faq.title}`),
+      sendEmail((await User.findById(faq.author).select("email").lean())?.email, "Your CrowdFAQ question received an answer", `${request.user.name} answered: ${faq.title}`),
       ...(faq.followers ?? []).map((follower) => notify({
         recipient: follower,
         actor: request.user.id,
@@ -227,7 +227,7 @@ router.patch("/api/answers/:id/accept", authenticate, async (request, response, 
         faq: faq.id,
         answer: answer.id,
       }),
-      sendEmail(answer.author, "Your CrowdFAQ answer was accepted", `Your answer to "${faq.title}" was marked as Best Answer.`),
+      sendEmail((await User.findById(answer.author).select("email").lean())?.email, "Your CrowdFAQ answer was accepted", `Your answer to "${faq.title}" was marked as Best Answer.`),
     ]);
     return ok(response, { answer, accepted: answer.isAccepted });
   } catch (error) {

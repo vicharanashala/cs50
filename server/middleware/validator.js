@@ -5,7 +5,8 @@ export function validate(schema) {
   return (request, response, next) => {
     const result = schema.safeParse(request.body);
     if (!result.success) {
-      const errors = Object.fromEntries(result.error.errors.map((e) => [e.path.join("."), e.message]));
+      const issues = result.error.issues ?? result.error.errors ?? [];
+      const errors = Object.fromEntries(issues.map((e) => [e.path.join("."), e.message]));
       return fail(response, 400, "Please fix the highlighted fields", errors);
     }
     request.body = result.data;
