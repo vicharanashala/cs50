@@ -62,7 +62,18 @@ export default function AskFaqPage() {
     setBusy(true);
     setErrors({});
     try {
-      const data = await post("/faqs", { ...form, semester: form.semester || undefined });
+      const payload = {
+        title: form.title,
+        description: form.description,
+        category: form.category,
+        isAnonymous: form.isAnonymous,
+        tags: form.tags,
+        ...(form.company && { company: form.company }),
+        ...(form.role && { role: form.role }),
+        ...(form.branch && { branch: form.branch }),
+        ...(form.semester && { semester: form.semester }),
+      };
+      const data = await post("/faqs", payload);
       toast("Your question is live!");
       navigate(`/faqs/${data.faq._id}`);
     } catch (error) {

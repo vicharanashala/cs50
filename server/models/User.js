@@ -34,4 +34,6 @@ const userSchema = new mongoose.Schema(
 export const userFields = "name email role branch semester rollNumber bio reputation questionsAsked answersGiven acceptedAnswers savedFaqs isBanned createdAt";
 export const authorFields = "name reputation";
 
+userSchema.index({ reputation: -1 });
+
 export default mongoose.model("User", userSchema);

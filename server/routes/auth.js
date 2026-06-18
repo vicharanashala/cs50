@@ -104,7 +104,7 @@ router.post("/api/auth/forgot-password", validate(forgotPasswordSchema), async (
     await user.save();
     const resetUrl = `${request.protocol}://${request.get("host")}/reset-password/${token}`;
     const text = `Reset your CrowdFAQ password:\n\n${resetUrl}\n\nThis link expires in 1 hour. If you did not request this, ignore this email.`;
-    await sendEmail(user._id, "CrowdFAQ Password Reset", text);
+    await sendEmail(user.email, "CrowdFAQ Password Reset", text);
     console.log(`Password reset link for ${user.email}: ${resetUrl}`);
     return ok(response, { message: "If that email exists, a reset link has been sent" });
   } catch (error) {
@@ -119,7 +119,7 @@ router.get("/api/auth/verify-email/:token", async (request, response, next) => {
       emailVerificationExpires: { $gt: new Date() },
     });
     if (!user) return fail(response, 400, "Invalid or expired verification link");
-    user.isVerified = true;
+    user.isEmailVerified = true;
     user.emailVerificationToken = undefined;
     user.emailVerificationExpires = undefined;
     await user.save();

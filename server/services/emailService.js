@@ -9,19 +9,17 @@ const smtpTransport = process.env.SMTP_HOST && process.env.SMTP_USER && process.
     })
   : null;
 
-export async function sendEmail(userId, subject, text) {
-  if (!smtpTransport || !userId) return;
-  const { default: User } = await import("../models/User.js");
-  const user = await User.findById(userId).select("email").lean();
-  if (!user?.email) return;
+export async function sendEmail(to, subject, text) {
+  if (!smtpTransport || !to) return;
   try {
     await smtpTransport.sendMail({
       from: process.env.SMTP_FROM ?? process.env.SMTP_USER,
-      to: user.email,
+      to,
       subject,
       text,
     });
   } catch (error) {
     console.error(`Email notification failed: ${error.message}`);
+    throw error;
   }
 }
