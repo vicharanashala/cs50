@@ -51,9 +51,9 @@ export default function FaqCard({ faq, onChange, search = "" }) {
         <div className="faq-footer">
           <AuthorIdentity item={faq} meta={`asked ${relativeTime(faq.createdAt)}`} />
           <div className="faq-metrics">
-            <button className="metric-button vote" onClick={upvote}><ArrowUp size={14} /> {faq.upvotes}</button>
-            <button className="metric-button vote" onClick={downvote}><ArrowDown size={14} /> {faq.downvotes}</button>
-            <span><MessageCircle size={14} /> {faq.answerCount}</span>
+            <button className={`metric-button vote ${faq.upvoted ? "active" : ""}`} onClick={upvote}><ArrowUp size={14} /> {faq.upvotes}</button>
+            <button className={`metric-button vote ${faq.downvoted ? "active" : ""}`} onClick={downvote}><ArrowDown size={14} /> {faq.downvotes}</button>
+            <Link to={`/faqs/${faq._id}#answer`}><MessageCircle size={14} /> {faq.answerCount}</Link>
             <span><Eye size={14} /> {faq.viewCount}</span>
           </div>
         </div>

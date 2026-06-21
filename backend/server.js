@@ -110,6 +110,7 @@ const answerSchema = new mongoose.Schema(
     isVerified: { type: Boolean, default: false },
     comments: [
       {
+        replyTo: { type: mongoose.Schema.Types.ObjectId },
         author: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         body: { type: String, trim: true, maxlength: 500 },
         upvotes: { type: Number, default: 0 },
@@ -247,19 +248,38 @@ async function generateAiText(prompt, instructions) {
     if (!aiResponse.ok) throw new Error("AI_REQUEST_FAILED");
     return result.candidates?.[0]?.content?.parts?.map((part) => part.text).join("").trim();
   }
+  const useGroq = Boolean(process.env.GROQ_API_KEY);
+  if (useGroq) {
+    const aiResponse = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
+        messages: [
+          { role: "system", content: instructions },
+          { role: "user", content: prompt }
+        ]
+      }),
+    });
+    const result = await aiResponse.json();
+    if (!aiResponse.ok) throw new Error("AI_REQUEST_FAILED");
+    return result.choices?.[0]?.message?.content;
+  }
   if (!process.env.OPENAI_API_KEY) throw new Error("AI_NOT_CONFIGURED");
-  const aiResponse = await fetch("https://api.openai.com/v1/responses", {
+  const aiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model,
-      instructions,
-      input: prompt,
+      model: model || "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: instructions },
+        { role: "user", content: prompt }
+      ]
     }),
   });
   const result = await aiResponse.json();
   if (!aiResponse.ok) throw new Error("AI_REQUEST_FAILED");
-  return result.output_text ?? result.output?.flatMap((item) => item.content ?? []).find((item) => item.type === "output_text")?.text;
+  return result.choices?.[0]?.message?.content;
 }
 async function refreshFaqSummary(faqId) {
   const faq = await Faq.findById(faqId);
@@ -894,7 +914,9 @@ app.post("/api/answers/:id/comments", authenticate, async (request, response, ne
     const faq = await Faq.findById(answer.faq).select("author").lean();
     if (!faq) return fail(response, 404, "FAQ not found");
     if (faq.author.equals(request.user.id)) return fail(response, 403, "You cannot comment on your own FAQ");
-    answer.comments.push({ author: request.user.id, body });
+    const replyTo = request.body.replyTo;
+    if (replyTo && !answer.comments.id(replyTo)) return fail(response, 404, "Parent comment not found");
+    answer.comments.push({ author: request.user.id, body, replyTo });
     await answer.save();
     await notifyMentions(body, { actor: request.user.id, faq: answer.faq, answer: answer.id });
     return ok(response, { answer: await publicAnswerQuery(Answer.findById(answer.id)).lean() }, 201);
@@ -911,7 +933,18 @@ app.delete("/api/answers/:id/comments/:commentId", authenticate, async (request,
     if (!comment.author || !comment.author.equals(request.user.id)) {
       return fail(response, 403, "You can only delete your own comment");
     }
-    comment.deleteOne();
+    const toDelete = new Set([comment.id]);
+    let added;
+    do {
+      added = false;
+      for (const c of answer.comments) {
+        if (c.replyTo && toDelete.has(c.replyTo.toString()) && !toDelete.has(c.id)) {
+          toDelete.add(c.id);
+          added = true;
+        }
+      }
+    } while (added);
+    answer.comments = answer.comments.filter((c) => !toDelete.has(c.id));
     await answer.save();
     return ok(response, { answer: await publicAnswerQuery(Answer.findById(answer.id)).lean() });
   } catch (error) {
@@ -942,7 +975,7 @@ app.patch("/api/answers/:id/accept", authenticate, async (request, response, nex
     if (!answer) return fail(response, 404, "Answer not found");
     if (!answer.isVerified) return fail(response, 400, "This answer must be verified by an admin before it can be accepted");
     const faq = await Faq.findById(answer.faq);
-    if (!faq.author.equals(request.user.id)) return fail(response, 403, "Only the question author can accept an answer");
+    if (!faq.author.equals(request.user.id) && request.user.role !== "admin") return fail(response, 403, "Only the question author or an admin can accept an answer");
     const previous = await Answer.findOne({ faq: faq.id, isAccepted: true });
     if (previous && !previous._id.equals(answer._id)) {
       previous.isAccepted = false;

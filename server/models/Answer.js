@@ -14,6 +14,7 @@ const answerSchema = new mongoose.Schema(
     isVerified: { type: Boolean, default: false },
     comments: [
       {
+        replyTo: { type: mongoose.Schema.Types.ObjectId },
         author: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         body: { type: String, trim: true, maxlength: 500 },
         upvotes: { type: Number, default: 0 },

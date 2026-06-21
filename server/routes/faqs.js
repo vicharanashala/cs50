@@ -302,8 +302,13 @@ router.delete("/api/faqs/:id", authenticate, async (request, response, next) => 
     await Promise.all([
       Report.deleteMany({ contentType: "faq", content: faq.id }),
       Notification.deleteMany({ faq: faq.id }),
-      User.updateMany({}, { $pull: { savedFaqs: faq.id } }),
+      User.updateMany({}, { $pull: { savedFaqs: faq.id, followedFaqs: faq.id } }),
       User.findByIdAndUpdate(faq.author, { $inc: { questionsAsked: -1 } }),
+      faq.tags.length
+        ? Tag.bulkWrite(faq.tags.map((tag) => ({
+            updateOne: { filter: { name: tag }, update: { $inc: { usageCount: -1 } } },
+          })))
+        : Promise.resolve(),
     ]);
     return ok(response, { deleted: true });
   } catch (error) {

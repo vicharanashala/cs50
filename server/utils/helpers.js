@@ -24,6 +24,7 @@ export function updateTrending(faq) {
 }
 
 export function requireReputation(user, minimum, action) {
+  if (user.role === "admin") return null;
   if (user.reputation < minimum) {
     return `${action} requires at least ${minimum} reputation (you have ${user.reputation})`;
   }

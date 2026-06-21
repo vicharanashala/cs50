@@ -18,7 +18,15 @@ export default function AdminPage() {
   const [faqs, setFaqs] = useState([]);
   const [answers, setAnswers] = useState([]);
   const [reports, setReports] = useState([]);
+  const [expandedAnswers, setExpandedAnswers] = useState(new Set());
   const toast = useToast();
+  
+  const toggleAnswer = (id) => {
+    const next = new Set(expandedAnswers);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setExpandedAnswers(next);
+  };
   async function load() {
     try {
       const [nextStats, nextUsers, nextFaqs, nextAnswers, nextReports] = await Promise.all([
@@ -124,7 +132,14 @@ export default function AdminPage() {
           </AdminTable>}
           {tab === "answers" && <AdminTable headings={["Answer", "FAQ", "Author", "Status", "Action"]}>
             {answers.map((answer) => <tr key={answer._id}>
-              <td>{answer.body.slice(0, 90)}</td>
+              <td>
+                {expandedAnswers.has(answer._id) ? answer.body : answer.body.slice(0, 90)}
+                {answer.body.length > 90 && (
+                  <button onClick={() => toggleAnswer(answer._id)} style={{ marginLeft: "6px", fontSize: "0.85em", background: "none", border: "none", color: "var(--primary)", cursor: "pointer", textDecoration: "underline", padding: 0 }}>
+                    {expandedAnswers.has(answer._id) ? "See less" : "See more"}
+                  </button>
+                )}
+              </td>
               <td><Link to={`/faqs/${answer.faq?._id}`}>{answer.faq?.title}</Link></td>
               <td>{profilePath(answer) ? <Link to={profilePath(answer)}>{authorName(answer)}</Link> : authorName(answer)}</td>
               <td><span className={`verification-badge ${answer.isVerified ? "verified" : "unverified"}`}>{answer.isVerified ? "Verified" : "Unverified"}</span></td>

@@ -22,6 +22,9 @@ export async function api(path, options = {}) {
     return result.data;
   } catch (error) {
     if (!error.errors) error.errors = {};
+    if (error instanceof TypeError && error.message === "Failed to fetch") {
+      error.message = "Cannot connect to the server. The backend may still be starting up — please wait a moment and try again.";
+    }
     throw error;
   }
 }

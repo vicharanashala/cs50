@@ -32,7 +32,18 @@ export default function AuthPage({ register = false }) {
     setErrors({});
     setAlert("");
     try {
-      const data = await post(register ? "/auth/register" : "/auth/login", form);
+      const payload = register
+        ? {
+            name: form.name,
+            email: form.email,
+            password: form.password,
+            confirmPassword: form.confirmPassword,
+            ...(form.branch && { branch: form.branch }),
+            ...(form.semester && { semester: form.semester }),
+            ...(form.rollNumber && { rollNumber: form.rollNumber }),
+          }
+        : form;
+      const data = await post(register ? "/auth/register" : "/auth/login", payload);
       auth.login(data.token, data.user);
       toast(register ? "Welcome to CrowdFAQ!" : `Welcome back, ${data.user.name}!`, "info");
       navigate(location.state?.from ?? "/faqs", { replace: true });

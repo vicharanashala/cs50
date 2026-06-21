@@ -14,9 +14,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
     "bcryptjs": "^3.0.3",
-    "concurrently": "^9.1.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -30,12 +28,14 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.16.0",
-    "typescript": "~5.7.2",
-    "vite": "^6.0.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
     "mongodb-memory-server": "^11.2.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5",
     "vitest": "^4.1.8"
   }
 }

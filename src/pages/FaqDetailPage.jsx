@@ -46,6 +46,13 @@ export default function FaqDetailPage() {
       setFaq((current) => current ? { ...current, viewCount } : current);
     }).catch(() => {});
   }, [id]);
+  useEffect(() => {
+    if (faq && window.location.hash) {
+      setTimeout(() => {
+        document.querySelector(window.location.hash)?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+    }
+  }, [faq]);
   function requireLogin() {
     if (!auth.user) {
       navigate("/login", { state: { from: `/faqs/${id}`, message: "Please login to continue" } });
@@ -136,8 +143,12 @@ export default function FaqDetailPage() {
           <div className="detail-actions">
             <button title="Upvote" className={faq.upvoted ? "active" : ""} onClick={() => toggleFaqAction("upvote")}><ArrowUp size={16} /> {faq.upvotes}</button>
             <button title="Downvote" className={faq.downvoted ? "active" : ""} onClick={() => toggleFaqAction("downvote")}><ArrowDown size={16} /> {faq.downvotes}</button>
-            <button title="Save" className={faq.saved ? "active" : ""} onClick={() => toggleFaqAction("save")}><Bookmark size={16} /></button>
-            {!ownsFaq && <button title="Follow" className={faq.followed ? "active" : ""} onClick={toggleFollow}>{faq.followed ? <UserCheck size={16} /> : <UserPlus size={16} />}</button>}
+            {auth.user?.role !== "admin" && (
+              <>
+                <button title="Save" className={faq.saved ? "active" : ""} onClick={() => toggleFaqAction("save")}><Bookmark size={16} /></button>
+                {!ownsFaq && <button title="Follow" className={faq.followed ? "active" : ""} onClick={toggleFollow}>{faq.followed ? <UserCheck size={16} /> : <UserPlus size={16} />}</button>}
+              </>
+            )}
             <button title="Share" onClick={share}><Link2 size={16} /></button>
             <button title="Report" onClick={() => requireLogin() && setReport({ type: "faq", id })}><CircleAlert size={16} /></button>
             {isMod && (faq.status !== "closed"
