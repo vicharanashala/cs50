@@ -87,7 +87,14 @@ export default function ProfilePage() {
         <section className="surface profile-header">
           <span className="avatar avatar-blue large">{initials(user.name)}</span>
           <div>
-            <h1>{user.name}</h1>
+            <h1 style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              {user.name}
+              {data.leaderboardRank && data.leaderboardRank <= 3 && (
+                <span title={`Top ${data.leaderboardRank} contributor`} className={`leaderboard-rank rank-${["gold", "silver", "bronze"][data.leaderboardRank - 1]}`} style={{ display: "inline-grid", width: "28px", height: "28px", fontSize: "12px", alignSelf: "center" }}>
+                  {data.leaderboardRank}
+                </span>
+              )}
+            </h1>
             {isAdmin
               ? <p style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--primary)" }}>
                   <ShieldCheck size={15} /> {roleLabel}

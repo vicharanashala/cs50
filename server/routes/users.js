@@ -15,17 +15,19 @@ router.get("/api/users/:id", optionalAuth, async (request, response, next) => {
     if (!objectId(request.params.id)) return fail(response, 404, "User not found");
     const user = await User.findById(request.params.id).select(`${userFields} followers following`).lean();
     if (!user) return fail(response, 404, "User not found");
-    const [faqs, answers] = await Promise.all([
+    const [faqs, answers, higherRepCount] = await Promise.all([
       Faq.find({ author: user._id }).select("title category status createdAt").sort({ createdAt: -1 }).limit(10).lean(),
       Answer.find({ author: user._id }).populate("faq", "title").select("body faq createdAt isAccepted").sort({ createdAt: -1 }).limit(10).lean(),
+      User.countDocuments({ role: { $ne: "admin" }, reputation: { $gt: user.reputation || 0 } }),
     ]);
+    const leaderboardRank = user.role !== "admin" ? higherRepCount + 1 : null;
     delete user.savedFaqs;
     const followerCount = user.followers?.length ?? 0;
     const followingCount = user.following?.length ?? 0;
     const followedByViewer = request.user ? (user.followers ?? []).some((id) => id.equals(request.user.id)) : false;
     delete user.followers;
     delete user.following;
-    return ok(response, { user, faqs, answers, followerCount, followingCount, followedByViewer });
+    return ok(response, { user, faqs, answers, followerCount, followingCount, followedByViewer, leaderboardRank });
   } catch (error) {
     next(error);
   }
