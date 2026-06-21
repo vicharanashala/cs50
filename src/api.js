@@ -2,23 +2,28 @@ const configuredUrl = import.meta.env.VITE_API_URL ?? "http://localhost:3000";
 export const apiBase = configuredUrl.endsWith("/api") ? configuredUrl : `${configuredUrl}/api`;
 
 export async function api(path, options = {}) {
-  const token = localStorage.getItem("crowdfaq_token");
-  const response = await fetch(`${apiBase}${path}`, {
-    ...options,
-    headers: {
-      ...(options.body && { "Content-Type": "application/json" }),
-      ...(token && { Authorization: `Bearer ${token}` }),
-      ...options.headers,
-    },
-  });
-  const result = await response.json().catch(() => ({ success: false, message: "The server returned an invalid response" }));
-  if (!response.ok) {
-    const error = new Error(result.message || "Something went wrong. Please try again.");
-    error.status = response.status;
-    error.errors = result.errors ?? {};
+  try {
+    const token = localStorage.getItem("crowdfaq_token");
+    const response = await fetch(`${apiBase}${path}`, {
+      ...options,
+      headers: {
+        ...(options.body && { "Content-Type": "application/json" }),
+        ...(token && { Authorization: `Bearer ${token}` }),
+        ...options.headers,
+      },
+    });
+    const result = await response.json().catch(() => ({ success: false, message: "The server returned an invalid response" }));
+    if (!response.ok) {
+      const error = new Error(result.message || "Something went wrong. Please try again.");
+      error.status = response.status;
+      error.errors = result.errors ?? {};
+      throw error;
+    }
+    return result.data;
+  } catch (error) {
+    if (!error.errors) error.errors = {};
     throw error;
   }
-  return result.data;
 }
 
 export function post(path, body) {
